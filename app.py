@@ -215,6 +215,8 @@ def get_timer():
     time_left = max(0, TURN_DURATION - int(time.time() - CACHE['turn_start']))
     return jsonify({'time_left': time_left})
 
+import os
 if __name__ == '__main__':
     initialize_state()
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
