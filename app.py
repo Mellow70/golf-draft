@@ -24,7 +24,7 @@ CLIENT = gspread.authorize(CREDS)
 
 # Google Sheet setup
 print("Available spreadsheets:", CLIENT.list_spreadsheet_files())
-SHEET = CLIENT.open("1lA0HYWd3CaiPXkCPFLltR2BPu6ucIVfWGuUUdlDMSY4").sheet1  # Update sheet name if different
+SHEET = CLIENT.open("1lA0HYWd3CaiPXkCPFLltR2BPu6ucIVfWGuUUdlDMSY4").worksheet("Draft Board")
 
 # Draft settings
 TOURNAMENT = "PGA Championship"
