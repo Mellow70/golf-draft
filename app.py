@@ -11,7 +11,10 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Secure session key
 
 # Environment variable for Google Credentials
-SCOPE = ["https://www.googleapis.com/auth/spreadsheets"]
+SCOPE = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
 creds_json = os.environ.get("GOOGLE_CREDENTIALS")
 if not creds_json:
     raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
