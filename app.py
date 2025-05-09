@@ -8,7 +8,8 @@ import time
 from datetime import datetime
 
 app = Flask(__name__)
-print("Template folder:", app.template_folder)  # Add after app = Flask(__name__)
+print("Template folder:", app.template_folder)
+print("Files in template folder:", os.listdir(app.template_folder) if os.path.exists(app.template_folder) else "Folder not found")
 app.secret_key = os.urandom(24)  # Secure session key
 
 # Environment variable for Google Credentials
