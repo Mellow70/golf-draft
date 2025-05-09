@@ -95,6 +95,3 @@ def make_pick():
         next_user()
         return jsonify({"status": "success", "message": "Pick recorded", "next_user": list(USERS.values())[CURRENT_USER_INDEX]})
     return jsonify({"status": "error", "message": "Pick already taken or invalid"}), 400
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
