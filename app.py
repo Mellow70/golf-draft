@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 
 app = Flask(__name__)
+print("Template folder:", app.template_folder)  # Add after app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Secure session key
 
 # Environment variable for Google Credentials
