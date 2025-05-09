@@ -23,8 +23,10 @@ CREDS = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
 CLIENT = gspread.authorize(CREDS)
 
 # Google Sheet setup
-print("Available spreadsheets:", CLIENT.list_spreadsheet_files())
-SHEET = CLIENT.open("1lA0HYWd3CaiPXkCPFLltR2BPu6ucIVfWGuUUdlDMSY4").worksheet("Draft Board")
+print("Available spreadsheets:", CLIENT.list_spreadsheet_files())  # Debug line
+spreadsheet = CLIENT.open_by_key("1lA0HYWd3CaiPXkCPFLltR2BPu6ucIVfWGuUUdlDMSY4")
+print("Available worksheets:", spreadsheet.worksheets())  # Debug to confirm tabs
+SHEET = spreadsheet.worksheet("Draft Board")
 
 # Draft settings
 TOURNAMENT = "PGA Championship"
