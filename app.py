@@ -1,7 +1,7 @@
 import os
 import json
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2 import service_account
 import gspread
 import threading
 import time
@@ -21,7 +21,7 @@ creds_json = os.environ.get("GOOGLE_CREDENTIALS")
 if not creds_json:
     raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
 creds_dict = json.loads(creds_json)
-CREDS = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
+CREDS = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
 CLIENT = gspread.authorize(CREDS)
 
 # Google Sheet setup
