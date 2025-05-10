@@ -4,3 +4,7 @@ __pycache__/
 *.pyd
 .env
 key1.json
+key2.json
+key1_single_line.txt
+New Text Document.txt
+*.json
