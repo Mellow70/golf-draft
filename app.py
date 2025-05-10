@@ -19,14 +19,18 @@ client = gspread.authorize(creds)
 golfer_sheet = client.open("FantasyGolf2025").worksheet("Golfer Pool")
 draft_sheet = client.open("FantasyGolf2025").worksheet("Draft Board")
 
-# Fetch golfers and rankings from "Golfer Pool" worksheet (names in A, rankings in B)
-golfer_data = golfer_sheet.get_all_values()[1:]  # Skip header row
-# Create a list of tuples: [(golfer, ranking), ...], sorted by ranking (lower is better)
-available_golfers = [(row[0], int(row[1])) for row in golfer_data if row[0] and row[1]]  # Use Column A and B
-available_golfers.sort(key=lambda x: x[1])  # Sort by ranking (ascending)
+# Function to fetch available golfers and their rankings
+def get_available_golfers():
+    # Fetch all picks from "Draft Board" to determine which golfers are taken
+    picks_data = draft_sheet.get_all_records()
+    taken_golfers = {row["Golfer"] for row in picks_data if row["Golfer"]}
 
-# Extract just the golfer names for the dropdown
-golfers = [golfer[0] for golfer in available_golfers]
+    # Fetch golfers and rankings from "Golfer Pool" (names in A, rankings in B)
+    golfer_data = golfer_sheet.get_all_values()[1:]  # Skip header row
+    # Create a list of tuples: [(golfer, ranking), ...], sorted by ranking (lower is better)
+    available_golfers = [(row[0], int(row[1])) for row in golfer_data if row[0] and row[1] and row[0] not in taken_golfers]
+    available_golfers.sort(key=lambda x: x[1])  # Sort by ranking (ascending)
+    return available_golfers
 
 # User credentials for login
 USERS = {
@@ -60,6 +64,9 @@ def logout():
 def index():
     if 'username' not in session:
         return redirect(url_for('login'))
+    # Fetch available golfers for the dropdown
+    available_golfers = get_available_golfers()
+    golfers = [golfer[0] for golfer in available_golfers]
     # Fetch picks from "Draft Board" worksheet
     picks_data = draft_sheet.get_all_records()
     picks = [{"player": row["Player"], "golfer": row["Golfer"], "time": row["Time"]} for row in picks_data]
@@ -79,29 +86,26 @@ def pick():
     if 'username' not in session:
         return redirect(url_for('login'))
     golfer = request.form['golfer']
+    # Fetch available golfers to verify the pick
+    available_golfers = get_available_golfers()
+    golfers = [g[0] for g in available_golfers]
     if golfer in golfers:
         # Add pick to "Draft Board" worksheet
         draft_sheet.append_row([session['username'], golfer, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-        # Remove golfer from available_golfers and golfers lists
-        global available_golfers, golfers
-        available_golfers = [g for g in available_golfers if g[0] != golfer]
-        golfers.remove(golfer)
     return redirect(url_for('index'))
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
     if 'username' not in session:
         return jsonify({"error": "Not logged in"}), 401
+    # Fetch available golfers
+    available_golfers = get_available_golfers()
     if not available_golfers:
         return jsonify({"error": "No golfers available"}), 400
     # Select the highest-ranked available golfer (lowest ranking number)
-    global available_golfers, golfers
-    golfer, ranking = available_golfers[0]  # First entry is highest-ranked (lowest ranking number)
+    golfer, ranking = available_golfers[0]  # First entry is highest-ranked
     # Add autopick to "Draft Board" worksheet
     draft_sheet.append_row([session['username'], golfer, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-    # Remove golfer from available_golfers and golfers lists
-    available_golfers = [g for g in available_golfers if g[0] != golfer]
-    golfers.remove(golfer)
     return jsonify({"success": True, "golfer": golfer})
 
 if __name__ == '__main__':
