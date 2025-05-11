@@ -1,96 +1,299 @@
 <!DOCTYPE html>
-     <html lang="en">
-     <head>
-         <meta charset="UTF-8">
-         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-         <title>{{ tournament }} Draft</title>
-         <script src="https://cdn.tailwindcss.com"></script>
-         <style>
-             .table-container { max-height: 400px; overflow-y: auto; }
-             .table-header { position: sticky; top: 0; background-color: #4a5568; color: white; }
-             th, td { padding: 4px; text-align: left; white-space: nowrap; }
-             th { font-weight: bold; }
-             td { max-width: 0; overflow: hidden; text-overflow: ellipsis; }
-         </style>
-         <script>
-             const draftOrder = {{ participants | tojson }};
-             let lastPickCount = {{ picks | length }};
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fantasy Golf Draft - PGA Championship</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .table-container { max-height: 400px; overflow-y: auto; }
+        .table-header { position: sticky; top: 0; background-color: #e5e7eb; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4">
+        <h1 class="text-3xl font-bold mb-4">Fantasy Golf Draft - PGA Championship</h1>
+        <div class="mb-4">
+            {% if username %}
+                <span class="font-semibold">Logged in as: {{ username }}</span>
+                <a href="{{ url_for('logout') }}" class="ml-4 text-blue-500 hover:underline">Logout</a>
+            {% else %}
+                <span class="font-semibold">Not logged in</span>
+                <a href="{{ url_for('login') }}" class="ml-4 text-blue-500 hover:underline">Login</a>
+            {% endif %}
+        </div>
 
-             function checkForUpdates() {
-                 fetch('/draft_state')
-                     .then(response => response.json())
-                     .then(data => {
-                         if (data.picks.length > lastPickCount) {
-                             lastPickCount = data.picks.length;
-                             location.reload();
-                         }
-                     })
-                     .catch(error => console.error("Update check error:", error));
-             }
+        {% if draft_complete %}
+            <div class="bg-green-100 p-4 rounded">
+                <h2 class="text-xl font-semibold">Draft Complete!</h2>
+                <p>All players have made their picks. Check back for final results.</p>
+            </div>
+        {% else %}
+            <div class="bg-blue-100 p-4 rounded mb-4">
+                <h2 class="text-xl font-semibold">Current Turn</h2>
+                <p>Pick <span id="current-pick-number">{{ current_pick_number }}</span>: <span id="current-player">{{ current_player }}</span></p>
+                <p>Time remaining: <span id="timer">{{ timer_seconds }}</span> seconds</p>
+            </div>
 
-             window.onload = function() {
-                 setInterval(checkForUpdates, 2000); // Check every 2 seconds
-                 const table = document.getElementById('playersTable');
-                 const data = {{ player_picks | tojson }};
-                 const sortedPlayers = draftOrder.filter(player => player in data);
-                 sortedPlayers.forEach(player => {
-                     const row = document.createElement('tr');
-                     row.innerHTML = `
-                         <td class="border px-2 py-1">${player}</td>
-                         <td class="border px-2 py-1">${data[player].map(p => p.Golfer).join(', ') || 'N/A'}</td>
-                     `;
-                     table.querySelector('tbody').appendChild(row);
-                 });
-             };
-         </script>
-     </head>
-     <body class="bg-gray-100 p-5">
-         <header class="bg-green-800 text-white p-4 text-xl font-bold">
-             {{ tournament }} Draft
-         </header>
-         <p class="mt-2">Logged in as: {{ username }} | <a href="/logout" class="text-blue-500">Logout</a></p>
-         {% if draft_complete %}
-             <h1 class="text-2xl font-bold mt-4">Draft Complete!</h1>
-             <p class="mt-2">Thank you for participating. Check back for final results.</p>
-         {% else %}
-             <h1 class="text-2xl font-bold mt-4">Current Turn: {{ current_player }}</h1>
-             <p class="mt-2">Pick #{{ current_pick_number }} | Time Left: {{ timer_seconds }} seconds</p>
-             {% if username and USER_PLAYER_MAPPING[username] == current_player %}
-                 <form id="pickForm" method="POST" action="/pick" class="mt-4">
-                     <select name="golfer" class="p-2 border rounded">
-                         {% for golfer in golfers %}
-                             <option value="{{ golfer }}">{{ golfer }}</option>
-                         {% endfor %}
-                     </select>
-                     <button type="submit" class="ml-2 p-2 bg-blue-500 text-white rounded">Submit Pick</button>
-                 </form>
-             {% else %}
-                 <p class="mt-2">Not your turn—please wait!</p>
-             {% endif %}
-         {% endif %}
-         <h2 class="text-xl font-bold mt-4">Players Picks</h2>
-         <div class="table-container mt-2">
-             <table id="playersTable" class="w-full border-collapse border">
-                 <thead>
-                     <tr class="table-header">
-                         <th class="border px-2 py-1">Player</th>
-                         <th class="border px-2 py-1">Picks</th>
-                     </tr>
-                 </thead>
-                 <tbody></tbody>
-             </table>
-         </div>
-         <div id="instructions" class="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded">
-             <h3 class="font-bold">Instructions</h3>
-             <ul class="list-disc pl-5">
-                 <li>Welcome to the draft!</li>
-                 <li>Starts at 8 PM on {{ draft_date }} based on the listed order.</li>
-                 <li>Log in with your username—pick only on your turn.</li>
-                 <li>5-minute timer per pick; auto-pick selects the highest-ranked golfer if missed.</li>
-                 <li>Select 3 golfers total.</li>
-                 <li>Winner takes all; if no winner, highest-ranking golfer decides.</li>
-                 <li>Good luck!</li>
-             </ul>
-         </div>
-     </body>
-     </html>
+            {% if username and USER_PLAYER_MAPPING[username] == current_player %}
+                <div class="mb-4">
+                    <h2 class="text-xl font-semibold">Make a Pick</h2>
+                    <select id="golfer-select" class="border p-2 rounded">
+                        <option value="">Select a golfer</option>
+                        {% for golfer in golfers %}
+                            <option value="{{ golfer }}">{{ golfer }}</option>
+                        {% endfor %}
+                    </select>
+                    <button id="pick-button" class="bg-blue-500 text-white px-4 py-2 rounded ml-2">Pick Golfer</button>
+                </div>
+            {% endif %}
+        {% endif %}
+
+        <div class="mb-4">
+            <h2 class="text-xl font-semibold mb-2">Players and Picks</h2>
+            <div class="table-container">
+                <table class="w-full border-collapse border">
+                    <thead>
+                        <tr class="bg-gray-200 table-header">
+                            <th class="border p-2">Player</th>
+                            <th class="border p-2">Picks</th>
+                        </tr>
+                    </thead>
+                    <tbody id="players-picks"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <h2 class="text-xl font-semibold mb-2">Draft Board</h2>
+            <div class="table-container">
+                <table class="w-full border-collapse border">
+                    <thead>
+                        <tr class="bg-gray-200 table-header">
+                            <th class="border p-2">Player</th>
+                            <th class="border p-2">Golfer</th>
+                            <th class="border p-2">Round</th>
+                        </tr>
+                    </thead>
+                    <tbody id="draft-board">
+                        {% for pick in picks %}
+                            <tr>
+                                <td class="border p-2">{{ pick.Player }}</td>
+                                <td class="border p-2">{{ pick.Golfer }}</td>
+                                <td class="border p-2">{{ pick['Pick Time'] }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded">
+            <h3 class="font-bold">How to Play</h3>
+            <ul class="list-disc pl-5">
+                <li>Join the draft starting at 8 PM tonight!</li>
+                <li>Log in with your assigned username and pick only when it’s your turn.</li>
+                <li>Each pick has a 3-minute timer—miss it, and an auto-pick grabs the top-ranked golfer.</li>
+                <li>Choose 3 golfers total, tracked in the Players and Picks table.</li>
+                <li>The winner takes all; if no golfer wins, the highest rank decides.</li>
+                <li>Enjoy the competition!</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const draftOrder = {{ participants | tojson }};
+        const timerSeconds = {{ timer_seconds }};
+        let timeLeft = timerSeconds;
+        let timerInterval = null;
+        const draftComplete = {{ draft_complete | tojson }};
+        let lastPickCount = {{ picks | length }};
+
+        function startTimer() {
+            if (draftComplete) return;
+
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                document.getElementById('timer').textContent = timeLeft;
+
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    triggerAutopick();
+                }
+            }, 1000);
+        }
+
+        function resetTimer() {
+            clearInterval(timerInterval);
+            timeLeft = timerSeconds;
+            document.getElementById('timer').textContent = timeLeft;
+            startTimer();
+        }
+
+        function triggerAutopick() {
+            fetch('/autopick', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateDraftBoard(data.player, data.golfer, data.pick_time);
+                    updateCurrentTurn(data.player, data.golfer);
+                } else {
+                    console.error('Autopick failed: ' + (data.error || 'Unknown error'));
+                    updateCurrentTurn();
+                }
+            })
+            .catch(error => {
+                console.error('Autopick error:', error);
+                updateCurrentTurn();
+            });
+        }
+
+        function updateDraftBoard(player, golfer, pickTime) {
+            const tbody = document.getElementById('draft-board');
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="border p-2">${player}</td>
+                <td class="border p-2">${golfer}</td>
+                <td class="border p-2">${pickTime}</td>
+            `;
+            tbody.appendChild(row);
+        }
+
+        function updateCurrentTurn(lastPlayer = null, lastGolfer = null) {
+            let attempts = 0;
+            const maxAttempts = 5;
+            const checkState = () => {
+                fetch('/draft_state')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            console.error('Error fetching draft state: ' + data.error);
+                            if (attempts < maxAttempts) {
+                                attempts++;
+                                setTimeout(checkState, 1000);
+                            }
+                            return;
+                        }
+
+                        const lastPickFound = lastPlayer && lastGolfer && data.picks.some(p => 
+                            p.Player === lastPlayer && p.Golfer === lastGolfer
+                        );
+
+                        if (!lastPickFound && attempts < maxAttempts) {
+                            attempts++;
+                            setTimeout(checkState, 1000);
+                            return;
+                        }
+
+                        const currentPlayerElement = document.getElementById('current-player');
+                        const currentPickNumberElement = document.getElementById('current-pick-number');
+                        currentPlayerElement.textContent = data.current_player || '';
+                        currentPickNumberElement.textContent = data.current_pick_number || '';
+
+                        const golferSelect = document.getElementById('golfer-select');
+                        if (golferSelect) {
+                            golferSelect.innerHTML = '<option value="">Select a golfer</option>';
+                            data.available_golfers.forEach(golfer => {
+                                const option = document.createElement('option');
+                                option.value = golfer;
+                                option.textContent = golfer;
+                                golferSelect.appendChild(option);
+                            });
+                        }
+
+                        const draftBoard = document.getElementById('draft-board');
+                        draftBoard.innerHTML = '';
+                        data.picks.forEach(pick => {
+                            const row = document.createElement('tr');
+                            row.innerHTML = `
+                                <td class="border p-2">${pick.Player}</td>
+                                <td class="border p-2">${pick.Golfer}</td>
+                                <td class="border p-2">${pick['Pick Time']}</td>
+                            `;
+                            draftBoard.appendChild(row);
+                        });
+
+                        const playersPicks = document.getElementById('players-picks');
+                        playersPicks.innerHTML = '';
+                        const sortedPlayers = draftOrder.filter(player => player in data.player_picks);
+                        sortedPlayers.forEach(player => {
+                            const row = document.createElement('tr');
+                            const picks = data.player_picks[player].map(p => p.Golfer).join(', ') || 'N/A';
+                            row.innerHTML = `
+                                <td class="border p-2">${player}</td>
+                                <td class="border p-2">${picks}</td>
+                            `;
+                            playersPicks.appendChild(row);
+                        });
+
+                        if (data.draft_complete) {
+                            location.reload();
+                        } else {
+                            resetTimer();
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching draft state:', error);
+                        if (attempts < maxAttempts) {
+                            attempts++;
+                            setTimeout(checkState, 1000);
+                        } else {
+                            resetTimer();
+                        }
+                    });
+            };
+            checkState();
+        }
+
+        document.getElementById('pick-button')?.addEventListener('click', () => {
+            const golfer = document.getElementById('golfer-select').value;
+            if (!golfer) {
+                alert('Please select a golfer');
+                return;
+            }
+
+            fetch('/pick', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: `golfer=${encodeURIComponent(golfer)}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateDraftBoard(data.player, data.golfer, data.pick_time);
+                    updateCurrentTurn(data.player, data.golfer);
+                } else {
+                    alert('Pick failed: ' + (data.error || 'Unknown error'));
+                    updateCurrentTurn();
+                }
+            })
+            .catch(error => {
+                console.error('Pick error:', error);
+                updateCurrentTurn();
+            });
+        });
+
+        window.onload = function() {
+            const table = document.getElementById('players-picks');
+            const data = {{ player_picks | tojson }};
+            const sortedPlayers = draftOrder.filter(player => player in data);
+            sortedPlayers.forEach(player => {
+                const row = document.createElement('tr');
+                const picks = data[player].map(p => p.Golfer).join(', ') || 'N/A';
+                row.innerHTML = `
+                    <td class="border p-2">${player}</td>
+                    <td class="border p-2">${picks}</td>
+                `;
+                table.appendChild(row);
+            });
+
+            if (!draftComplete) {
+                startTimer();
+            }
+        };
+    </script>
+</body>
+</html>
