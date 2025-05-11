@@ -1,10 +1,11 @@
-from flask import Flask, request, render_template, redirect, url_for, session, jsonify
+from flask import Flask, request, render_template, redirect, url_for, session, jsonify, g
 import gspread
 from google.oauth2.service_account import Credentials
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import json
+import backoff
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'default_secret_key')
@@ -83,8 +84,11 @@ def get_draft_order():
         print(f"Error generating draft order: {e}")
         return PLAYERS
 
+@backoff.on_exception(backoff.expo, Exception, max_tries=3, giveup=lambda e: not str(e).startswith('[429]'))
 def load_golfers():
-    """Load golfers from the Golfers worksheet."""
+    """Load golfers from the Golfers worksheet with caching."""
+    if 'golfers' in g:
+        return g.golfers
     try:
         all_values = worksheet.get_all_values()
         
@@ -108,13 +112,17 @@ def load_golfers():
             print("Warning: Golfers worksheet has no golfers")
             return []
         
-        return sorted(records, key=lambda x: x['Ranking'])
+        g.golfers = sorted(records, key=lambda x: x['Ranking'])
+        return g.golfers
     except Exception as e:
         print(f"Error loading golfers: {e}")
-        return []
+        raise
 
+@backoff.on_exception(backoff.expo, Exception, max_tries=3, giveup=lambda e: not str(e).startswith('[429]'))
 def load_draft_picks():
-    """Load draft picks from the Draft Board worksheet."""
+    """Load draft picks from the Draft Board worksheet with caching."""
+    if 'draft_picks' in g:
+        return g.draft_picks
     try:
         all_values = draft_worksheet.get_all_values()
         
@@ -151,13 +159,14 @@ def load_draft_picks():
             int(x['Pick Time'].split()[1])
         ))
         
-        return picks
+        g.draft_picks = picks
+        return g.draft_picks
     except Exception as e:
         print(f"Error loading draft picks: {e}")
-        return []
+        raise
 
 def save_draft_pick(player, golfer, pick_time):
-    """Save a draft pick to the Draft Board worksheet."""
+    """Save a draft pick to the Draft Board worksheet and clear cache."""
     try:
         records = draft_worksheet.get_all_records()
         player_row = None
@@ -194,8 +203,10 @@ def save_draft_pick(player, golfer, pick_time):
         
         pick_column_letter = chr(ord('B') + pick_index)
         cell_to_update = f"{pick_column_letter}{row_index}"
-        draft_worksheet.update(cell_to_update, golfer)
+        draft_worksheet.update(cell_to_update, [[golfer]], value_input_option='RAW')
         print(f"Saved pick: {player} picked {golfer} in {pick_columns[pick_index]}")
+        if 'draft_picks' in g:
+            del g.draft_picks
     except Exception as e:
         print(f"Error saving draft pick: {e}")
         raise
