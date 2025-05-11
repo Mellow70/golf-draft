@@ -51,7 +51,7 @@ def load_golfers():
         if not records:
             print("Warning: Golfers worksheet is empty")
             return []
-        required_columns = ['Ranking', 'Golfer Name']  # Updated to match worksheet
+        required_columns = ['Ranking', 'Golfer Name']
         first_record = records[0]
         missing_columns = [col for col in required_columns if col not in first_record]
         if missing_columns:
@@ -83,8 +83,10 @@ def save_draft_pick(player, golfer, pick_time):
     """Save a draft pick to the Draft Board worksheet."""
     try:
         draft_worksheet.append_row([player, golfer, pick_time])
+        print(f"Saved pick: {player} picked {golfer} at {pick_time}")
     except Exception as e:
         print(f"Error saving draft pick: {e}")
+        raise
 
 def get_current_turn():
     """Determine the current player whose turn it is."""
@@ -133,7 +135,7 @@ def index():
     # Get available golfers (not yet picked)
     picked_golfers = [pick['Golfer'] for pick in picks]
     print(f"Picked golfers: {picked_golfers}")
-    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]  # Updated key
+    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
     print(f"Available golfers: {available_golfers}")
     
     # Group picks by player
@@ -150,6 +152,34 @@ def index():
                           current_player=current_player, current_pick_number=current_pick_number,
                           draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
                           players=PLAYERS, player_picks=player_picks)
+
+@app.route('/draft_state')
+def draft_state():
+    if 'username' not in session:
+        return jsonify({'error': 'Not logged in'}), 401
+    
+    golfers = load_golfers()
+    picks = load_draft_picks()
+    current_player, current_pick_number = get_current_turn()
+    
+    picked_golfers = [pick['Golfer'] for pick in picks]
+    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
+    
+    # Group picks by player for the Players and Picks table
+    player_picks = {player: [] for player in PLAYERS}
+    for pick in picks:
+        player = pick['Player']
+        if player in player_picks:
+            player_picks[player].append(pick)
+    
+    return jsonify({
+        'current_player': current_player,
+        'current_pick_number': current_pick_number,
+        'available_golfers': available_golfers,
+        'picks': picks,
+        'player_picks': player_picks,
+        'draft_complete': current_player is None
+    })
 
 @app.route('/pick', methods=['POST'])
 def pick():
@@ -172,10 +202,13 @@ def pick():
         return jsonify({'error': 'Golfer already picked'}), 400
     
     # Save the pick
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    save_draft_pick(current_player, golfer, pick_time)
+    try:
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        save_draft_pick(current_player, golfer, pick_time)
+    except Exception as e:
+        return jsonify({'error': f'Failed to save pick: {str(e)}'}), 500
     
-    return jsonify({'success': True, 'golfer': golfer, 'player': current_player})
+    return jsonify({'success': True, 'golfer': golfer, 'player': current_player, 'pick_time': pick_time})
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
@@ -192,18 +225,21 @@ def autopick():
     picked_golfers = [p['Golfer'] for p in picks]
     
     # Find the highest-ranked available golfer
-    available_golfers = [g for g in golfers if g['Golfer Name'] not in picked_golfers]  # Updated key
+    available_golfers = [g for g in golfers if g['Golfer Name'] not in picked_golfers]
     if not available_golfers:
         return jsonify({'error': 'No golfers available'}), 400
     
     # Pick the golfer with the lowest ranking (highest rank)
-    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']  # Updated key
+    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']
     
     # Save the autopick
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    save_draft_pick(current_player, selected_golfer, pick_time)
+    try:
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        save_draft_pick(current_player, selected_golfer, pick_time)
+    except Exception as e:
+        return jsonify({'error': f'Failed to save autopick: {str(e)}'}), 500
     
-    return jsonify({'success': True, 'golfer': selected_golfer, 'player': current_player})
+    return jsonify({'success': True, 'golfer': selected_golfer, 'player': current_player, 'pick_time': pick_time})
 
 @app.route('/logout')
 def logout():
