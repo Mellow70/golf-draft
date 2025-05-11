@@ -1,58 +1,58 @@
-import os
+from flask import Flask, request, render_template, redirect, url_for, session, jsonify
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
-import datetime
+from google.oauth2.service_account import Credentials
+import os
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key_here'  # Replace with a secure key
+app.secret_key = '9ed62a33f12cb61e618da92b53f9aaf0'  # Replace with a secure key
 
-# Google Sheets credentials from environment variable
-GOOGLE_CREDENTIALS = eval(os.environ.get('GOOGLE_CREDENTIALS'))
-
-# Initialize Google Sheets API
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CREDENTIALS, scope)
+# Google Sheets setup
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
 client = gspread.authorize(creds)
+SPREADSHEET_ID = 'your_spreadsheet_id_here'  # Replace with your Google Sheet ID
+sheet = client.open_by_key(SPREADSHEET_ID)
+worksheet = sheet.worksheet('Golfers')  # Worksheet with golfer rankings
+draft_worksheet = sheet.worksheet('Draft Board')  # Worksheet for draft picks
 
-# Access Google Sheets worksheets
-golfer_sheet = client.open("FantasyGolf2025").worksheet("Golfer Pool")
-draft_sheet = client.open("FantasyGolf2025").worksheet("Draft Board")
-
-# Function to fetch available golfers and their rankings
-def get_available_golfers():
-    # Fetch all picks from "Draft Board" to determine which golfers are taken
-    picks_data = draft_sheet.get_all_records()
-    taken_golfers = {row["Golfer"] for row in picks_data if row["Golfer"]}
-
-    # Fetch golfers and rankings from "Golfer Pool" (names in A, rankings in B)
-    golfer_data = golfer_sheet.get_all_values()[1:]  # Skip header row
-    # Create a list of tuples: [(golfer, ranking), ...], sorted by ranking (lower is better)
-    available_golfers = [(row[0], int(row[1])) for row in golfer_data if row[0] and row[1] and row[0] not in taken_golfers]
-    available_golfers.sort(key=lambda x: x[1])  # Sort by ranking (ascending)
-    return available_golfers
-
-# User credentials for login
-USERS = {
-    "user1": "Player1-PGA2025",
-    "user2": "Player2-PGA2025",
-    # Add more for 20-30 players, e.g.,
-    # "user3": "Player3-PGA2025",
-    # "user4": "Player4-PGA2025",
-    # ...
-    # "user30": "Player30-PGA2025",
+# Sample users for login (replace with your actual users)
+users = {
+    'user1': 'Player1-PGA2025',
+    'user2': 'Player2-PGA2025',
+    # Add more users as needed
 }
 
+# Load golfers from Google Sheets
+def load_golfers():
+    records = worksheet.get_all_records()
+    return sorted(records, key=lambda x: x['Ranking'])
+
+# Load draft picks from Google Sheets
+def load_draft_picks():
+    records = draft_worksheet.get_all_records()
+    return records
+
+# Save a draft pick to Google Sheets
+def save_draft_pick(player, golfer, pick_time):
+    draft_worksheet.append_row([player, golfer, pick_time])
+
 @app.route('/')
+def home():
+    if 'username' in session:
+        return redirect(url_for('index'))
+    return redirect(url_for('login'))
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        if username in USERS and USERS[username] == password:
+        if username in users and users[username] == password:
             session['username'] = username
             return redirect(url_for('index'))
-        return render_template('login.html', error='Invalid credentials')
+        else:
+            return render_template('login.html', error="Invalid username or password")
     return render_template('login.html')
 
 @app.route('/logout')
@@ -64,49 +64,55 @@ def logout():
 def index():
     if 'username' not in session:
         return redirect(url_for('login'))
-    # Fetch available golfers for the dropdown
-    available_golfers = get_available_golfers()
-    golfers = [golfer[0] for golfer in available_golfers]
-    # Fetch picks from "Draft Board" worksheet
-    picks_data = draft_sheet.get_all_records()
-    picks = [{"player": row["Player"], "golfer": row["Golfer"], "time": row["Time"]} for row in picks_data]
-    return render_template('index.html', golfers=golfers, picks=picks)
-
-@app.route('/draft')
-def draft():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    # Fetch picks from "Draft Board" worksheet
-    picks_data = draft_sheet.get_all_records()
-    picks = [{"player": row["Player"], "golfer": row["Golfer"], "time": row["Time"]} for row in picks_data]
-    return jsonify({"picks": picks})
+    
+    golfers = load_golfers()
+    picks = load_draft_picks()
+    available_golfers = [g['Golfer'] for g in golfers if g['Golfer'] not in [p['Golfer'] for p in picks]]
+    
+    return render_template('index.html', golfers=available_golfers, picks=picks)
 
 @app.route('/pick', methods=['POST'])
 def pick():
     if 'username' not in session:
         return redirect(url_for('login'))
+    
     golfer = request.form['golfer']
-    # Fetch available golfers to verify the pick
-    available_golfers = get_available_golfers()
-    golfers = [g[0] for g in available_golfers]
-    if golfer in golfers:
-        # Add pick to "Draft Board" worksheet
-        draft_sheet.append_row([session['username'], golfer, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+    player = session['username']
+    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Save the pick to Google Sheets
+    save_draft_pick(player, golfer, pick_time)
+    
     return redirect(url_for('index'))
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
     if 'username' not in session:
-        return jsonify({"error": "Not logged in"}), 401
-    # Fetch available golfers
-    available_golfers = get_available_golfers()
+        return jsonify({'success': False, 'error': 'Not logged in'})
+    
+    golfers = load_golfers()
+    picks = load_draft_picks()
+    available_golfers = [g for g in golfers if g['Golfer'] not in [p['Golfer'] for p in picks]]
+    
     if not available_golfers:
-        return jsonify({"error": "No golfers available"}), 400
+        return jsonify({'success': False, 'error': 'No golfers available'})
+    
     # Select the highest-ranked available golfer (lowest ranking number)
-    golfer, ranking = available_golfers[0]  # First entry is highest-ranked
-    # Add autopick to "Draft Board" worksheet
-    draft_sheet.append_row([session['username'], golfer, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
-    return jsonify({"success": True, "golfer": golfer})
+    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])
+    golfer_name = selected_golfer['Golfer']
+    player = session['username']
+    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Save the autopick to Google Sheets
+    save_draft_pick(player, golfer_name, pick_time)
+    
+    return jsonify({'success': True, 'golfer': golfer_name})
+
+@app.route('/draft')
+def draft():
+    picks = load_draft_picks()
+    return jsonify({'picks': picks})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
