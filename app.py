@@ -24,7 +24,34 @@ worksheet = sheet.worksheet('Golfers')
 draft_worksheet = sheet.worksheet('Draft Board')
 
 # Hardcoded users for simplicity
-users = {'user1': 'Player1-PGA2025', 'user2': 'Player2-PGA2025'}  # Add more as needed
+users = {'user1': 'Player1-PGA2025', 'user2': 'Player2-PGA2025', 'admin': 'admin'}
+
+# User-to-player mapping
+USER_PLAYER_MAPPING = {
+    'user1': 'Alex',
+    'user2': 'Liz',
+    'user3': 'Eric',
+    'user4': 'Jed',
+    'user5': 'Stacie',
+    'user6': 'Jason',
+    'user7': 'Stephen',
+    'user8': 'Mel',
+    'user9': 'Brandon',
+    'user10': 'Tony',
+    'user11': 'Ryan',
+    'user12': 'Player12',
+    'user13': 'Player13',
+    'user14': 'Player14',
+    'user15': 'Player15',
+    'user16': 'Player16',
+    'user17': 'Player17',
+    'user18': 'Player18',
+    'user19': 'Player19',
+    'user20': 'Player20'
+}
+
+# Debug mode for testing
+DEBUG_MODE = True
 
 # List of players
 PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony',
@@ -89,25 +116,42 @@ def save_draft_pick(player, golfer, pick_time):
         raise
 
 def get_current_turn():
-    """Determine the current player whose turn it is."""
+    """Determine the current player whose turn it is based on existing picks."""
     picks = load_draft_picks()
     total_picks = len(picks)
     if total_picks >= len(PLAYERS) * PICKS_PER_PLAYER:
         return None, None
     
+    sorted_picks = sorted(picks, key=lambda x: x.get('Pick Time', ''), reverse=True)
+    last_player = sorted_picks[0]['Player'] if sorted_picks else None
+    
     draft_order = get_draft_order()
-    current_position = total_picks % len(draft_order)
+    if not last_player:
+        current_position = 0
+    else:
+        last_index = draft_order.index(last_player)
+        current_position = (last_index + 1) % len(draft_order)
+    
     current_player = draft_order[current_position]
     
     player_picks = sum(1 for pick in picks if pick['Player'] == current_player)
     if player_picks >= PICKS_PER_PLAYER:
-        return None, None
+        next_position = (current_position + 1) % len(draft_order)
+        while next_position != current_position:
+            next_player = draft_order[next_position]
+            next_player_picks = sum(1 for pick in picks if pick['Player'] == next_player)
+            if next_player_picks < PICKS_PER_PLAYER:
+                current_player = next_player
+                break
+            next_position = (next_position + 1) % len(draft_order)
+        if next_position == current_position:
+            return None, None
     
     return current_player, total_picks + 1
 
 @app.route('/')
 def home():
-    return redirect(url_for('login'))
+    return redirect(url_for('index'))  # Allow access to index without login
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -123,29 +167,23 @@ def login():
 
 @app.route('/index')
 def index():
-    if 'username' not in session:
-        return redirect(url_for('login'))
-    
     golfers = load_golfers()
     print(f"Loaded golfers: {golfers}")
     picks = load_draft_picks()
     print(f"Loaded picks: {picks}")
     current_player, current_pick_number = get_current_turn()
     
-    # Get available golfers (not yet picked)
     picked_golfers = [pick['Golfer'] for pick in picks]
     print(f"Picked golfers: {picked_golfers}")
     available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
     print(f"Available golfers: {available_golfers}")
     
-    # Group picks by player
     player_picks = {player: [] for player in PLAYERS}
     for pick in picks:
         player = pick['Player']
         if player in player_picks:
             player_picks[player].append(pick)
     
-    # Draft status
     draft_complete = current_player is None
     
     return render_template('index.html', golfers=available_golfers, picks=picks,
@@ -155,9 +193,6 @@ def index():
 
 @app.route('/draft_state')
 def draft_state():
-    if 'username' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-    
     golfers = load_golfers()
     picks = load_draft_picks()
     current_player, current_pick_number = get_current_turn()
@@ -165,7 +200,6 @@ def draft_state():
     picked_golfers = [pick['Golfer'] for pick in picks]
     available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
     
-    # Group picks by player for the Players and Picks table
     player_picks = {player: [] for player in PLAYERS}
     for pick in picks:
         player = pick['Player']
@@ -188,6 +222,8 @@ def pick():
     
     golfer = request.form.get('golfer')
     current_player, _ = get_current_turn()
+    logged_in_user = session['username']
+    assigned_player = USER_PLAYER_MAPPING.get(logged_in_user)
     
     if not golfer:
         return jsonify({'error': 'No golfer selected'}), 400
@@ -195,13 +231,14 @@ def pick():
     if not current_player:
         return jsonify({'error': 'Draft is complete or no current turn'}), 400
     
-    # Verify the golfer is still available
+    if not DEBUG_MODE and assigned_player != current_player:
+        return jsonify({'error': 'You can only pick for your assigned player'}), 403
+    
     picks = load_draft_picks()
     picked_golfers = [p['Golfer'] for p in picks]
     if golfer in picked_golfers:
         return jsonify({'error': 'Golfer already picked'}), 400
     
-    # Save the pick
     try:
         pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         save_draft_pick(current_player, golfer, pick_time)
@@ -212,27 +249,27 @@ def pick():
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
-    if 'username' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
-    
     current_player, _ = get_current_turn()
+    
     if not current_player:
         return jsonify({'error': 'Draft is complete or no current turn'}), 400
     
-    # Load golfers and picks
+    if 'username' in session:
+        logged_in_user = session['username']
+        assigned_player = USER_PLAYER_MAPPING.get(logged_in_user)
+        if not DEBUG_MODE and assigned_player != current_player:
+            return jsonify({'error': 'You can only autopick for your assigned player'}), 403
+    
     golfers = load_golfers()
     picks = load_draft_picks()
     picked_golfers = [p['Golfer'] for p in picks]
     
-    # Find the highest-ranked available golfer
     available_golfers = [g for g in golfers if g['Golfer Name'] not in picked_golfers]
     if not available_golfers:
         return jsonify({'error': 'No golfers available'}), 400
     
-    # Pick the golfer with the lowest ranking (highest rank)
     selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']
     
-    # Save the autopick
     try:
         pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         save_draft_pick(current_player, selected_golfer, pick_time)
@@ -244,7 +281,7 @@ def autopick():
 @app.route('/logout')
 def logout():
     session.pop('username', None)
-    return redirect(url_for('login'))
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     app.run(debug=True)
