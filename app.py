@@ -53,7 +53,7 @@ USER_PLAYER_MAPPING = {
 # Debug mode for testing
 DEBUG_MODE = True
 
-# List of players
+# List of players (used as a fallback)
 PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony',
            'Ryan', 'Player12', 'Player13', 'Player14', 'Player15', 'Player16', 'Player17',
            'Player18', 'Player19', 'Player20']
@@ -62,27 +62,54 @@ PICKS_PER_PLAYER = TOTAL_ROUNDS
 TIMER_SECONDS = 180
 
 def get_draft_order():
-    """Generate the snake draft order."""
-    order = []
-    for round_num in range(TOTAL_ROUNDS):
-        if round_num % 2 == 0:
-            order.extend(PLAYERS)
-        else:
-            order.extend(reversed(PLAYERS))
-    return order
+    """Generate the draft order based on the Draft Order column in the Draft Board."""
+    try:
+        records = draft_worksheet.get_all_records()
+        if not records:
+            print("Draft Board worksheet has no players; using default order")
+            return PLAYERS
+        
+        # Sort players by Draft Order
+        sorted_players = sorted(records, key=lambda x: int(x['Draft Order']) if x['Draft Order'] else 999)
+        players = [record['Player'] for record in sorted_players if record['Player']]
+        
+        # Generate snake draft order
+        order = []
+        for round_num in range(TOTAL_ROUNDS):
+            if round_num % 2 == 0:
+                order.extend(players)
+            else:
+                order.extend(reversed(players))
+        return order
+    except Exception as e:
+        print(f"Error generating draft order: {e}")
+        return PLAYERS
 
 def load_golfers():
     """Load golfers from the Golfers worksheet."""
     try:
+        all_values = worksheet.get_all_values()
+        
+        if not all_values:
+            print("Golfers worksheet is empty; adding headers")
+            worksheet.append_row(['Golfer Name', 'Ranking'])
+            return []
+        
+        headers = all_values[0]
+        required_columns = ['Golfer Name', 'Ranking']
+        missing_columns = [col for col in required_columns if col not in headers]
+        
+        if missing_columns:
+            print(f"Golfers worksheet missing headers: {missing_columns}; resetting headers")
+            worksheet.clear()
+            worksheet.append_row(['Golfer Name', 'Ranking'])
+            return []
+        
         records = worksheet.get_all_records()
         if not records:
-            print("Warning: Golfers worksheet is empty")
+            print("Warning: Golfers worksheet has no golfers")
             return []
-        required_columns = ['Ranking', 'Golfer Name']
-        first_record = records[0]
-        missing_columns = [col for col in required_columns if col not in first_record]
-        if missing_columns:
-            raise ValueError(f"Missing required columns in Golfers worksheet: {missing_columns}")
+        
         return sorted(records, key=lambda x: x['Ranking'])
     except Exception as e:
         print(f"Error loading golfers: {e}")
@@ -91,17 +118,44 @@ def load_golfers():
 def load_draft_picks():
     """Load draft picks from the Draft Board worksheet."""
     try:
+        all_values = draft_worksheet.get_all_values()
+        
+        if not all_values:
+            print("Draft Board worksheet is empty; adding headers")
+            draft_worksheet.append_row(['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order'])
+            return []
+        
+        headers = all_values[0]
+        required_columns = ['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order']
+        missing_columns = [col for col in required_columns if col not in headers]
+        
+        if missing_columns:
+            print(f"Draft Board worksheet missing headers: {missing_columns}; resetting headers")
+            draft_worksheet.clear()
+            draft_worksheet.append_row(['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order'])
+            return []
+        
         records = draft_worksheet.get_all_records()
         if not records:
-            print("Warning: Draft Board worksheet is empty")
+            print("Warning: Draft Board worksheet has no picks")
             return []
-        required_columns = ['Player', 'Golfer', 'Pick Time']
-        if records:
-            first_record = records[0]
-            missing_columns = [col for col in required_columns if col not in first_record]
-            if missing_columns:
-                raise ValueError(f"Missing required columns in Draft Board worksheet: {missing_columns}")
-        return records
+        
+        picks = []
+        for record in records:
+            player = record['Player']
+            for pick_num, pick_key in enumerate(['Pick 1', 'Pick 2', 'Pick 3'], 1):
+                golfer = record.get(pick_key, '').strip()
+                if golfer:
+                    pick_time = f"Round {pick_num} (No timestamp)"
+                    picks.append({'Player': player, 'Golfer': golfer, 'Pick Time': pick_time})
+        
+        draft_order = get_draft_order()
+        picks.sort(key=lambda x: (
+            draft_order.index(x['Player']) if x['Player'] in draft_order else len(draft_order),
+            int(x['Pick Time'].split()[1])
+        ))
+        
+        return picks
     except Exception as e:
         print(f"Error loading draft picks: {e}")
         return []
@@ -109,8 +163,43 @@ def load_draft_picks():
 def save_draft_pick(player, golfer, pick_time):
     """Save a draft pick to the Draft Board worksheet."""
     try:
-        draft_worksheet.append_row([player, golfer, pick_time])
-        print(f"Saved pick: {player} picked {golfer} at {pick_time}")
+        records = draft_worksheet.get_all_records()
+        player_row = None
+        row_index = 2
+        
+        for i, record in enumerate(records, 2):
+            if record['Player'] == player:
+                player_row = record
+                row_index = i
+                break
+        
+        if not player_row:
+            draft_order = get_draft_order()
+            draft_position = draft_order.index(player) + 1 if player in draft_order else len(draft_order) + 1
+            new_row = [player, '', '', '', str(draft_position)]
+            draft_worksheet.append_row(new_row)
+            records = draft_worksheet.get_all_records()
+            for i, record in enumerate(records, 2):
+                if record['Player'] == player:
+                    player_row = record
+                    row_index = i
+                    break
+        
+        pick_columns = ['Pick 1', 'Pick 2', 'Pick 3']
+        pick_index = 0
+        for i, col in enumerate(pick_columns):
+            if not player_row.get(col, '').strip():
+                pick_index = i
+                break
+            pick_index = i + 1
+        
+        if pick_index >= len(pick_columns):
+            raise ValueError(f"Player {player} has already made all {TOTAL_ROUNDS} picks")
+        
+        pick_column_letter = chr(ord('B') + pick_index)
+        cell_to_update = f"{pick_column_letter}{row_index}"
+        draft_worksheet.update(cell_to_update, golfer)
+        print(f"Saved pick: {player} picked {golfer} in {pick_columns[pick_index]}")
     except Exception as e:
         print(f"Error saving draft pick: {e}")
         raise
@@ -122,36 +211,33 @@ def get_current_turn():
     if total_picks >= len(PLAYERS) * PICKS_PER_PLAYER:
         return None, None
     
-    sorted_picks = sorted(picks, key=lambda x: x.get('Pick Time', ''), reverse=True)
-    last_player = sorted_picks[0]['Player'] if sorted_picks else None
-    
     draft_order = get_draft_order()
-    if not last_player:
-        current_position = 0
-    else:
-        last_index = draft_order.index(last_player)
-        current_position = (last_index + 1) % len(draft_order)
+    if not draft_order:
+        return None, None
     
+    current_position = total_picks % len(draft_order)
     current_player = draft_order[current_position]
     
     player_picks = sum(1 for pick in picks if pick['Player'] == current_player)
     if player_picks >= PICKS_PER_PLAYER:
         next_position = (current_position + 1) % len(draft_order)
-        while next_position != current_position:
+        attempts = 0
+        while attempts < len(draft_order):
             next_player = draft_order[next_position]
             next_player_picks = sum(1 for pick in picks if pick['Player'] == next_player)
             if next_player_picks < PICKS_PER_PLAYER:
                 current_player = next_player
                 break
             next_position = (next_position + 1) % len(draft_order)
-        if next_position == current_position:
+            attempts += 1
+        else:
             return None, None
     
     return current_player, total_picks + 1
 
 @app.route('/')
 def home():
-    return redirect(url_for('index'))  # Allow access to index without login
+    return redirect(url_for('index'))
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -240,7 +326,8 @@ def pick():
         return jsonify({'error': 'Golfer already picked'}), 400
     
     try:
-        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Since we don't store pick time in this format, use a placeholder
+        pick_time = f"Round {sum(1 for p in picks if p['Player'] == current_player) + 1} (No timestamp)"
         save_draft_pick(current_player, golfer, pick_time)
     except Exception as e:
         return jsonify({'error': f'Failed to save pick: {str(e)}'}), 500
@@ -271,7 +358,7 @@ def autopick():
     selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']
     
     try:
-        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pick_time = f"Round {sum(1 for p in picks if p['Player'] == current_player) + 1} (No timestamp)"
         save_draft_pick(current_player, selected_golfer, pick_time)
     except Exception as e:
         return jsonify({'error': f'Failed to save autopick: {str(e)}'}), 500
