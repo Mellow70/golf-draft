@@ -1,153 +1,96 @@
 <!DOCTYPE html>
-<html>
-<head>
-    <title>{{ tournament }} Draft</title>
-    <style>
-        body { background-color: #f0f8e6; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        header { background-color: #006400; color: white; text-align: left; padding: 10px; font-size: 24px; font-weight: bold; }
-        #timer { font-size: 18px; margin: 10px 0; }
-        #notification { color: #ff4500; font-style: italic; }
-        h2 { margin-top: 20px; color: #333; }
-        ul.teams { list-style-type: none; padding: 0; width: 50%; }
-        ul.teams li { margin: 5px 0; padding: 5px; background-color: white; border: 1px solid #ddd; border-radius: 4px; }
-        .participant { font-weight: bold; color: #2f4f4f; }
-        form { margin: 20px 0; }
-        select, button { padding: 5px; font-size: 16px; }
-        #instructions { position: relative; margin-top: 20px; left: 0; width: 450px; background-color: #fffacd; border: 1px solid #ddd; padding: 10px; border-radius: 4px; font-size: 16px; font-weight: bold; }
-        #instructions ul { list-style-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><circle cx="5" cy="5" r="5" fill="white" stroke="black"/></svg>'); padding-left: 20px; }
-    </style>
-    <script>
-        let lastPickCount = {{ current_picks | default(0) }};
+     <html lang="en">
+     <head>
+         <meta charset="UTF-8">
+         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+         <title>{{ tournament }} Draft</title>
+         <script src="https://cdn.tailwindcss.com"></script>
+         <style>
+             .table-container { max-height: 400px; overflow-y: auto; }
+             .table-header { position: sticky; top: 0; background-color: #4a5568; color: white; }
+             th, td { padding: 4px; text-align: left; white-space: nowrap; }
+             th { font-weight: bold; }
+             td { max-width: 0; overflow: hidden; text-overflow: ellipsis; }
+         </style>
+         <script>
+             const draftOrder = {{ participants | tojson }};
+             let lastPickCount = {{ picks | length }};
 
-        function updateTimer() {
-            fetch('/get_timer')
-            .then(response => response.json())
-            .then(data => {
-                if ('time_left' in data) {
-                    let timeLeft = data.time_left;
-                    document.getElementById('timer').innerText = `Time Left: ${Math.floor(timeLeft / 60)}:${(timeLeft % 60).toString().padStart(2, '0')}`;
-                    if (timeLeft === 0) {
-                        console.log("Timer hit zero, checking for auto-pick");
-                        setTimeout(() => location.reload(), 1000);  // Reload after auto-pick
-                    }
-                } else if (data.status === 'success') {
-                    location.reload();  // Auto-pick happened
-                }
-            })
-            .catch(error => console.log("Timer error:", error));
-        }
+             function checkForUpdates() {
+                 fetch('/draft_state')
+                     .then(response => response.json())
+                     .then(data => {
+                         if (data.picks.length > lastPickCount) {
+                             lastPickCount = data.picks.length;
+                             location.reload();
+                         }
+                     })
+                     .catch(error => console.error("Update check error:", error));
+             }
 
-        function autoPick() {
-            console.log("Auto-picking triggered by timer");
-            const player = document.querySelector('input[name="player"]').value;
-            const round = document.querySelector('input[name="round"]').value;
-            fetch('/auto_pick', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `player=${encodeURIComponent(player)}&round=${encodeURIComponent(round)}`
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    console.log(`Auto-picked: ${data.pick}`);
-                    document.getElementById('notification').innerText = `Auto-picked: ${data.pick}`;
-                    setTimeout(() => { document.getElementById('notification').innerText = ''; }, 3000);
-                    location.reload();
-                } else {
-                    alert('Auto-pick failed: ' + data.message);
-                }
-            })
-            .catch(error => console.log("Auto-pick error:", error));
-        }
-
-        function submitPick(event) {
-            console.log("Submit intercepted");
-            event.preventDefault();
-            const form = document.getElementById('pickForm');
-            const data = new FormData(form);
-            fetch('/submit', {
-                method: 'POST',
-                body: data
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    console.log("Pick successful, reloading");
-                    location.reload();
-                } else {
-                    alert('Pick failed: ' + data.message);
-                }
-            })
-            .catch(error => console.log("Submit error:", error));
-        }
-
-        function checkForUpdates() {
-            fetch('/check_picks')
-            .then(response => response.json())
-            .then(data => {
-                if (data.pick_count > lastPickCount) {
-                    console.log("New pick detected, reloading");
-                    lastPickCount = data.pick_count;
-                    location.reload();
-                }
-            })
-            .catch(error => console.log("Check error:", error));
-        }
-
-        window.onload = function() {
-            console.log("Page loaded, setting up listeners");
-            {% if not draft_complete %}
-            setInterval(updateTimer, 5000);  // Update timer every 5 seconds
-            setInterval(checkForUpdates, 2000);
-            {% if is_user_turn %}
-            document.getElementById('pickForm').addEventListener('submit', submitPick);
-            {% endif %}
-            {% endif %}
-        };
-    </script>
-</head>
-<body>
-    <header>{{ tournament }}</header>
-    <p>Logged in as: {{ username }} | <a href="/logout">Logout</a></p>
-    {% if draft_complete %}
-    <h1>{{ message }}</h1>
-    {% else %}
-    <h1>Current Turn: {{ turn }}</h1>
-    <div id="timer">Time Left: 5:00</div>
-    <p id="notification"></p>
-    {% if is_user_turn %}
-    <form id="pickForm" method="POST">
-        <input type="hidden" name="player" value="{{ player }}">
-        <input type="hidden" name="round" value="{{ round_num }}">
-        <select name="golfer">
-            {% for golfer in golfers %}
-                <option value="{{ golfer.name }}">{{ golfer.name }} (Rank: {{ golfer.ranking }})</option>
-            {% endfor %}
-        </select>
-        <button type="submit">Submit Pick</button>
-    </form>
-    {% else %}
-    <p>Not your turn yet—please wait!</p>
-    {% endif %}
-    {% endif %}
-    <h2>Teams</h2>
-    <ul class="teams">
-        {% for team in teams %}
-            <li><span class="participant">{{ team[0] }}</span>: {{ team[1] }}, {{ team[2] }}, {{ team[3] }}</li>
-        {% endfor %}
-    </ul>
-    <div id="instructions">
-        <ul>
-            <li>Welcome!</li>
-            <li>The snake draft starts at 8pm, {{ draft_date }} based on the randomized order as listed</li>
-            <li>Log in with your username and password—only pick when it’s your turn!</li>
-            <li>You have 5 minutes to make your pick once your turn begins.</li>
-            <li>If you miss the timer, an auto-pick selects the highest-ranked available golfer (based on rankings).</li>
-            <li>Your selected golfers will appear next to your name—3 golfers total.</li>
-            <li>Winner takes all!</li>
-            <li>If no selected golfer wins, the highest-ranking golfer decides the winner.</li>
-            <li>Good luck!</li>
-        </ul>
-    </div>
-</body>
-</html>
+             window.onload = function() {
+                 setInterval(checkForUpdates, 2000); // Check every 2 seconds
+                 const table = document.getElementById('playersTable');
+                 const data = {{ player_picks | tojson }};
+                 const sortedPlayers = draftOrder.filter(player => player in data);
+                 sortedPlayers.forEach(player => {
+                     const row = document.createElement('tr');
+                     row.innerHTML = `
+                         <td class="border px-2 py-1">${player}</td>
+                         <td class="border px-2 py-1">${data[player].map(p => p.Golfer).join(', ') || 'N/A'}</td>
+                     `;
+                     table.querySelector('tbody').appendChild(row);
+                 });
+             };
+         </script>
+     </head>
+     <body class="bg-gray-100 p-5">
+         <header class="bg-green-800 text-white p-4 text-xl font-bold">
+             {{ tournament }} Draft
+         </header>
+         <p class="mt-2">Logged in as: {{ username }} | <a href="/logout" class="text-blue-500">Logout</a></p>
+         {% if draft_complete %}
+             <h1 class="text-2xl font-bold mt-4">Draft Complete!</h1>
+             <p class="mt-2">Thank you for participating. Check back for final results.</p>
+         {% else %}
+             <h1 class="text-2xl font-bold mt-4">Current Turn: {{ current_player }}</h1>
+             <p class="mt-2">Pick #{{ current_pick_number }} | Time Left: {{ timer_seconds }} seconds</p>
+             {% if username and USER_PLAYER_MAPPING[username] == current_player %}
+                 <form id="pickForm" method="POST" action="/pick" class="mt-4">
+                     <select name="golfer" class="p-2 border rounded">
+                         {% for golfer in golfers %}
+                             <option value="{{ golfer }}">{{ golfer }}</option>
+                         {% endfor %}
+                     </select>
+                     <button type="submit" class="ml-2 p-2 bg-blue-500 text-white rounded">Submit Pick</button>
+                 </form>
+             {% else %}
+                 <p class="mt-2">Not your turn—please wait!</p>
+             {% endif %}
+         {% endif %}
+         <h2 class="text-xl font-bold mt-4">Players Picks</h2>
+         <div class="table-container mt-2">
+             <table id="playersTable" class="w-full border-collapse border">
+                 <thead>
+                     <tr class="table-header">
+                         <th class="border px-2 py-1">Player</th>
+                         <th class="border px-2 py-1">Picks</th>
+                     </tr>
+                 </thead>
+                 <tbody></tbody>
+             </table>
+         </div>
+         <div id="instructions" class="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded">
+             <h3 class="font-bold">Instructions</h3>
+             <ul class="list-disc pl-5">
+                 <li>Welcome to the draft!</li>
+                 <li>Starts at 8 PM on {{ draft_date }} based on the listed order.</li>
+                 <li>Log in with your username—pick only on your turn.</li>
+                 <li>5-minute timer per pick; auto-pick selects the highest-ranked golfer if missed.</li>
+                 <li>Select 3 golfers total.</li>
+                 <li>Winner takes all; if no winner, highest-ranking golfer decides.</li>
+                 <li>Good luck!</li>
+             </ul>
+         </div>
+     </body>
+     </html>
