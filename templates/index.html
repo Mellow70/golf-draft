@@ -1,90 +1,1 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fantasy Golf Draft</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        #timer { font-size: 1.5rem; font-weight: bold; color: #1f2937; }
-        #draft-board th, #draft-board td { border: 1px solid #d1d5db; padding: 8px; text-align: left; }
-    </style>
-</head>
-<body class="bg-gray-100 p-6">
-    <div class="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-lg">
-        <h1 class="text-3xl font-bold text-gray-800 mb-4">Fantasy Golf Draft - PGA Championship 2025</h1>
-        <div class="mb-6">
-            <h2 class="text-xl font-semibold text-gray-700">Timer: <span id="timer">00:00</span></h2>
-        </div>
-        <div class="mb-6">
-            <h2 class="text-xl font-semibold text-gray-700 mb-2">Make Your Pick</h2>
-            <form method="POST" action="/pick" class="flex space-x-4">
-                <select name="golfer" class="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" required>
-                    <option value="" disabled selected>Select a Golfer</option>
-                    {% for golfer in golfers %}
-                    <option value="{{ golfer }}">{{ golfer }}</option>
-                    {% endfor %}
-                </select>
-                <button type="submit" class="bg-green-600 text-white p-2 rounded-md hover:bg-green-700 transition">Submit Pick</button>
-            </form>
-        </div>
-        <div>
-            <h2 class="text-xl font-semibold text-gray-700 mb-2">Draft Board</h2>
-            <table id="draft-board" class="w-full border-collapse">
-                <thead>
-                    <tr class="bg-gray-200">
-                        <th>Player</th>
-                        <th>Golfer</th>
-                        <th>Pick Time</th>
-                    </tr>
-                </thead>
-                <tbody id="draft-body">
-                    {% for pick in picks %}
-                    <tr>
-                        <td>{{ pick.player }}</td>
-                        <td>{{ pick.golfer }}</td>
-                        <td>{{ pick.time }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <script>
-        // Timer logic (assumes 5-minute rounds, adjust as needed)
-        let timeLeft = 300; // 5 minutes in seconds
-        const timerElement = document.getElementById('timer');
-        function updateTimer() {
-            const minutes = Math.floor(timeLeft / 60);
-            const seconds = timeLeft % 60;
-            timerElement.textContent = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;
-            if (timeLeft > 0) {
-                timeLeft--;
-            } else {
-                timeLeft = 300; // Reset timer
-            }
-        }
-        setInterval(updateTimer, 1000);
-        updateTimer();
-
-        // Fetch draft updates every 10 seconds
-        async function updateDraftBoard() {
-            try {
-                const response = await fetch('/draft');
-                const data = await response.json();
-                const draftBody = document.getElementById('draft-body');
-                draftBody.innerHTML = '';
-                data.picks.forEach(pick => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `<td>${pick.player}</td><td>${pick.golfer}</td><td>${pick.time}</td>`;
-                    draftBody.appendChild(row);
-                });
-            } catch (error) {
-                console.error('Error updating draft board:', error);
-            }
-        }
-        setInterval(updateDraftBoard, 10000);
-        updateDraftBoard();
-    </script>
-</body>
-</html>
+<!DOCTYPE html><html lang="en"><head>    <meta charset="UTF-8">    <meta name="viewport" content="width=device-width, initial-scale=1.0">    <title>Fantasy Golf Draft</title>    <script src="https://cdn.tailwindcss.com"></script>    <style>        #timer { font-size: 1.5rem; font-weight: bold; color: #1f2937; }        #draft-board th, #draft-board td { border: 1px solid #d1d5db; padding: 8px; text-align: left; }    </style></head><body class="bg-gray-100 p-6">    <div class="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-lg">        <h1 class="text-3xl font-bold text-gray-800 mb-4">Fantasy Golf Draft - PGA Championship 2025</h1>        <div class="mb-6">            <h2 class="text-xl font-semibold text-gray-700">Timer: <span id="timer">00:00</span></h2>        </div>        <div class="mb-6">            <h2 class="text-xl font-semibold text-gray-700 mb-2">Make Your Pick</h2>            <form method="POST" action="/pick" class="flex space-x-4">                <select name="golfer" class="p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" required>                    <option value="" disabled selected>Select a Golfer</option>                    {% for golfer in golfers %}                    <option value="{{ golfer }}">{{ golfer }}</option>                    {% endfor %}                </select>                <button type="submit" class="bg-green-600 text-white p-2 rounded-md hover:bg-green-700 transition">Submit Pick</button>            </form>        </div>        <div>            <h2 class="text-xl font-semibold text-gray-700 mb-2">Draft Board</h2>            <table id="draft-board" class="w-full border-collapse">                <thead>                    <tr class="bg-gray-200">                        <th>Player</th>                        <th>Golfer</th>                        <th>Pick Time</th>                    </tr>                </thead>                <tbody id="draft-body">                    {% for pick in picks %}                    <tr>                        <td>{{ pick.player }}</td>                        <td>{{ pick.golfer }}</td>                        <td>{{ pick.time }}</td>                    </tr>                    {% endfor %}                </tbody>            </table>        </div>    </div>    <script>        let timeLeft = 180; // 3 minutes in seconds        const timerElement = document.getElementById('timer');        function updateTimer() {            const minutes = Math.floor(timeLeft / 60);            const seconds = timeLeft % 60;            timerElement.textContent = `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`;            if (timeLeft === 0) {                fetch('/autopick', {                    method: 'POST',                    headers: {                        'Content-Type': 'application/json',                    },                })                .then(response => response.json())                .then(data => {                    if (data.success) {                        console.log(`Autopick successful: ${data.golfer}`);                    } else {                        console.error('Autopick failed:', data.error);                    }                })                .catch(error => console.error('Error during autopick:', error));                timeLeft = 180; // Reset to 3 minutes            } else {                timeLeft--;            }        }        setInterval(updateTimer, 1000);        updateTimer();        async function updateDraftBoard() {            try {                const response = await fetch('/draft');                const data = await response.json();                const draftBody = document.getElementById('draft-body');                draftBody.innerHTML = '';                data.picks.forEach(pick => {                    const row = document.createElement('tr');                    row.innerHTML = `<td>${pick.player}</td><td>${pick.golfer}</td><td>${pick.time}</td>`;                    draftBody.appendChild(row);                });            } catch (error) {                console.error('Error updating draft board:', error);            }        }        setInterval(updateDraftBoard, 10000);        updateDraftBoard();    </script></body></html>
