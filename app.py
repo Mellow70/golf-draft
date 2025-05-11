@@ -69,11 +69,9 @@ def get_draft_order():
             print("Draft Board worksheet has no players; using default order")
             return PLAYERS
         
-        # Sort players by Draft Order
         sorted_players = sorted(records, key=lambda x: int(x['Draft Order']) if x['Draft Order'] else 999)
         players = [record['Player'] for record in sorted_players if record['Player']]
         
-        # Generate snake draft order
         order = []
         for round_num in range(TOTAL_ROUNDS):
             if round_num % 2 == 0:
@@ -130,9 +128,7 @@ def load_draft_picks():
         missing_columns = [col for col in required_columns if col not in headers]
         
         if missing_columns:
-            print(f"Draft Board worksheet missing headers: {missing_columns}; resetting headers")
-            draft_worksheet.clear()
-            draft_worksheet.append_row(['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order'])
+            print(f"Draft Board worksheet has incorrect headers: {headers}. Expected: {required_columns}")
             return []
         
         records = draft_worksheet.get_all_records()
@@ -326,7 +322,6 @@ def pick():
         return jsonify({'error': 'Golfer already picked'}), 400
     
     try:
-        # Since we don't store pick time in this format, use a placeholder
         pick_time = f"Round {sum(1 for p in picks if p['Player'] == current_player) + 1} (No timestamp)"
         save_draft_pick(current_player, golfer, pick_time)
     except Exception as e:
@@ -364,6 +359,22 @@ def autopick():
         return jsonify({'error': f'Failed to save autopick: {str(e)}'}), 500
     
     return jsonify({'success': True, 'golfer': selected_golfer, 'player': current_player, 'pick_time': pick_time})
+
+@app.route('/setup', methods=['GET'])
+def setup():
+    if 'username' not in session or session['username'] != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    try:
+        draft_worksheet.clear()
+        draft_worksheet.append_row(['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order'])
+        
+        for i, player in enumerate(PLAYERS, 1):
+            draft_worksheet.append_row([player, '', '', '', str(i)])
+        
+        return jsonify({'success': True, 'message': 'Draft Board initialized with all players'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to setup Draft Board: {str(e)}'}), 500
 
 @app.route('/logout')
 def logout():
