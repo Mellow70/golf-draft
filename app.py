@@ -26,23 +26,21 @@ draft_worksheet = sheet.worksheet('Draft Board')
 # Hardcoded users for simplicity
 users = {'user1': 'Player1-PGA2025', 'user2': 'Player2-PGA2025'}  # Add more as needed
 
-# List of players (can be dynamic or hardcoded for now)
+# List of players
 PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony',
            'Ryan', 'Player12', 'Player13', 'Player14', 'Player15', 'Player16', 'Player17',
-           'Player18', 'Player19', 'Player20']  # Adjust based on your player count
-TOTAL_ROUNDS = 3  # Each player picks 3 golfers
+           'Player18', 'Player19', 'Player20']
+TOTAL_ROUNDS = 3
 PICKS_PER_PLAYER = TOTAL_ROUNDS
-TIMER_SECONDS = 180  # 3 minutes
+TIMER_SECONDS = 180
 
 def get_draft_order():
     """Generate the snake draft order."""
     order = []
     for round_num in range(TOTAL_ROUNDS):
         if round_num % 2 == 0:
-            # Forward order (1 to N)
             order.extend(PLAYERS)
         else:
-            # Reverse order (N to 1)
             order.extend(reversed(PLAYERS))
     return order
 
@@ -53,7 +51,7 @@ def load_golfers():
         if not records:
             print("Warning: Golfers worksheet is empty")
             return []
-        required_columns = ['Ranking', 'Golfer']
+        required_columns = ['Ranking', 'Golfer Name']  # Updated to match worksheet
         first_record = records[0]
         missing_columns = [col for col in required_columns if col not in first_record]
         if missing_columns:
@@ -93,16 +91,15 @@ def get_current_turn():
     picks = load_draft_picks()
     total_picks = len(picks)
     if total_picks >= len(PLAYERS) * PICKS_PER_PLAYER:
-        return None, None  # Draft is complete
+        return None, None
     
     draft_order = get_draft_order()
     current_position = total_picks % len(draft_order)
     current_player = draft_order[current_position]
     
-    # Check if this player has already made their max picks (shouldn't happen in normal flow)
     player_picks = sum(1 for pick in picks if pick['Player'] == current_player)
     if player_picks >= PICKS_PER_PLAYER:
-        return None, None  # This player is done, but this indicates a logic error
+        return None, None
     
     return current_player, total_picks + 1
 
@@ -128,19 +125,31 @@ def index():
         return redirect(url_for('login'))
     
     golfers = load_golfers()
+    print(f"Loaded golfers: {golfers}")
     picks = load_draft_picks()
+    print(f"Loaded picks: {picks}")
     current_player, current_pick_number = get_current_turn()
     
     # Get available golfers (not yet picked)
     picked_golfers = [pick['Golfer'] for pick in picks]
-    available_golfers = [g['Golfer'] for g in golfers if g['Golfer'] not in picked_golfers]
+    print(f"Picked golfers: {picked_golfers}")
+    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]  # Updated key
+    print(f"Available golfers: {available_golfers}")
+    
+    # Group picks by player
+    player_picks = {player: [] for player in PLAYERS}
+    for pick in picks:
+        player = pick['Player']
+        if player in player_picks:
+            player_picks[player].append(pick)
     
     # Draft status
     draft_complete = current_player is None
     
     return render_template('index.html', golfers=available_golfers, picks=picks,
-                           current_player=current_player, current_pick_number=current_pick_number,
-                           draft_complete=draft_complete, timer_seconds=TIMER_SECONDS)
+                          current_player=current_player, current_pick_number=current_pick_number,
+                          draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
+                          players=PLAYERS, player_picks=player_picks)
 
 @app.route('/pick', methods=['POST'])
 def pick():
@@ -183,12 +192,12 @@ def autopick():
     picked_golfers = [p['Golfer'] for p in picks]
     
     # Find the highest-ranked available golfer
-    available_golfers = [g for g in golfers if g['Golfer'] not in picked_golfers]
+    available_golfers = [g for g in golfers if g['Golfer Name'] not in picked_golfers]  # Updated key
     if not available_golfers:
         return jsonify({'error': 'No golfers available'}), 400
     
     # Pick the golfer with the lowest ranking (highest rank)
-    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer']
+    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']  # Updated key
     
     # Save the autopick
     pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
