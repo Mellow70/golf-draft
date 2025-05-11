@@ -3,15 +3,25 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 from datetime import datetime
+from dotenv import load_dotenv
+import json
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = '9ed62a33f12cb61e618da92b53f9aaf0'  # Replace with a secure key
+app.secret_key = os.getenv('SECRET_KEY', 'default_key_if_not_set')  # Load secret key from .env
 
 # Google Sheets setup
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
+credentials_json = os.getenv('GOOGLE_CREDENTIALS')
+if not credentials_json:
+    raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
+import json
+credentials_info = json.loads(credentials_json)
+creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
 client = gspread.authorize(creds)
-SPREADSHEET_ID = 'your_spreadsheet_id_here'  # Replace with your Google Sheet ID
+SPREADSHEET_ID = os.getenv('SPREADSHEET_ID', 'your_spreadsheet_id_here')  # Load from .env, or fallback
 sheet = client.open_by_key(SPREADSHEET_ID)
 worksheet = sheet.worksheet('Golfers')  # Worksheet with golfer rankings
 draft_worksheet = sheet.worksheet('Draft Board')  # Worksheet for draft picks
