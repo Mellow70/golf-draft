@@ -39,25 +39,13 @@ USER_PLAYER_MAPPING = {
     'user8': 'Mel',
     'user9': 'Brandon',
     'user10': 'Tony',
-    'user11': 'Ryan',
-    'user12': 'Player12',
-    'user13': 'Player13',
-    'user14': 'Player14',
-    'user15': 'Player15',
-    'user16': 'Player16',
-    'user17': 'Player17',
-    'user18': 'Player18',
-    'user19': 'Player19',
-    'user20': 'Player20'
 }
 
 # Debug mode for testing
 DEBUG_MODE = True
 
 # List of players (used as a fallback)
-PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony',
-           'Ryan', 'Player12', 'Player13', 'Player14', 'Player15', 'Player16', 'Player17',
-           'Player18', 'Player19', 'Player20']
+PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony']
 TOTAL_ROUNDS = 3
 PICKS_PER_PLAYER = TOTAL_ROUNDS
 TIMER_SECONDS = 180
@@ -70,7 +58,9 @@ def get_draft_order():
             print("Draft Board worksheet has no players; using default order")
             return PLAYERS
         
-        sorted_players = sorted(records, key=lambda x: int(x['Draft Order']) if x['Draft Order'] else 999)
+        # Filter out generic players (e.g., 'PlayerXX')
+        actual_players = [record for record in records if not record['Player'].startswith('Player')]
+        sorted_players = sorted(actual_players, key=lambda x: int(x['Draft Order']) if x['Draft Order'] else 999)
         players = [record['Player'] for record in sorted_players if record['Player']]
         
         order = []
@@ -282,7 +272,7 @@ def index():
     return render_template('index.html', golfers=available_golfers, picks=picks,
                           current_player=current_player, current_pick_number=current_pick_number,
                           draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
-                          players=PLAYERS, player_picks=player_picks)
+                          participants=get_draft_order(), player_picks=player_picks)
 
 @app.route('/draft_state')
 def draft_state():
