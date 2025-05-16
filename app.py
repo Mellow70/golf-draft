@@ -224,10 +224,14 @@ def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
+        print(f"Login attempt: username={username}, password={password}")
         if username in USER_PASSWORDS and USER_PASSWORDS[username] == password:
             session['username'] = username
+            print(f"Login successful for {username}, redirecting to index")
             return redirect(url_for('index'))
+        print(f"Login failed for {username}: invalid credentials")
         return render_template('login.html', error="Invalid username or password")
+    print("Rendering login page for GET request")
     return render_template('login.html')
 
 @app.route('/logout')
