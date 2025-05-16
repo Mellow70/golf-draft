@@ -235,6 +235,10 @@ def logout():
     session.pop('username', None)
     return redirect(url_for('login'))
 
+@app.route('/')
+def root():
+    return redirect(url_for('index'))
+
 @app.route('/index')
 def index():
     golfers = load_golfers()
