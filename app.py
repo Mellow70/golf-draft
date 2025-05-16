@@ -1,31 +1,43 @@
-from flask import Flask, request, render_template, redirect, url_for, session, jsonify, g
-import gspread
-from google.oauth2.service_account import Credentials
 import os
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-import json
+from flask import Flask, render_template, request, session, redirect, url_for
+from flask_session import Session
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+import gspread
+from datetime import datetime
 import backoff
+from collections import defaultdict
+import json
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'default_secret_key')
-load_dotenv()
 
-# Google Sheets setup
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-credentials_json = os.getenv('GOOGLE_CREDENTIALS')
-if not credentials_json:
-    raise ValueError("GOOGLE_CREDENTIALS environment variable not set")
-credentials_info = json.loads(credentials_json)
-creds = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
-client = gspread.authorize(creds)
-SPREADSHEET_ID = os.getenv('SPREADSHEET_ID', 'your_spreadsheet_id_here')
+# Configure session to use filesystem
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_TYPE"] = "filesystem"
+Session(app)
+
+# Load Google Sheets credentials from environment variable
+creds_dict = json.loads(os.environ.get('GOOGLE_CREDENTIALS', '{}'))
+scoped_credentials = service_account.Credentials.from_service_account_info(
+    creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']
+)
+client = gspread.authorize(scoped_credentials)
+
+# Get the spreadsheet by ID from environment variable
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'your_spreadsheet_id_here')
 sheet = client.open_by_key(SPREADSHEET_ID)
-worksheet = sheet.worksheet('Golfers')
-draft_worksheet = sheet.worksheet('Draft Board')
+worksheet = sheet.worksheet("Golfers")
+draft_worksheet = sheet.worksheet("Draft Board")
 
-# Hardcoded users for simplicity
-users = {'user1': 'Player1-PGA2025', 'user2': 'Player2-PGA2025', 'admin': 'admin'}
+# Global cache using a simple dictionary (not persistent across restarts)
+g = {}
+
+# Hardcoded users and passwords
+USER_PASSWORDS = {
+    'user1': 'Player1-PGA2025',
+    'user2': 'Player2-PGA2025',
+    'admin': 'admin'
+}
 
 # User-to-player mapping
 USER_PLAYER_MAPPING = {
@@ -49,6 +61,7 @@ PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'B
 TOTAL_ROUNDS = 3
 PICKS_PER_PLAYER = TOTAL_ROUNDS
 TIMER_SECONDS = 180
+TOURNAMENT = "PGA Championship"
 
 def get_draft_order():
     """Generate the draft order based on the Draft Order column in the Draft Board."""
@@ -155,52 +168,6 @@ def load_draft_picks():
         print(f"Error loading draft picks: {e}")
         raise
 
-def save_draft_pick(player, golfer, pick_time):
-    """Save a draft pick to the Draft Board worksheet and clear cache."""
-    try:
-        records = draft_worksheet.get_all_records()
-        player_row = None
-        row_index = 2
-        
-        for i, record in enumerate(records, 2):
-            if record['Player'] == player:
-                player_row = record
-                row_index = i
-                break
-        
-        if not player_row:
-            draft_order = get_draft_order()
-            draft_position = draft_order.index(player) + 1 if player in draft_order else len(draft_order) + 1
-            new_row = [player, '', '', '', str(draft_position)]
-            draft_worksheet.append_row(new_row)
-            records = draft_worksheet.get_all_records()
-            for i, record in enumerate(records, 2):
-                if record['Player'] == player:
-                    player_row = record
-                    row_index = i
-                    break
-        
-        pick_columns = ['Pick 1', 'Pick 2', 'Pick 3']
-        pick_index = 0
-        for i, col in enumerate(pick_columns):
-            if not player_row.get(col, '').strip():
-                pick_index = i
-                break
-            pick_index = i + 1
-        
-        if pick_index >= len(pick_columns):
-            raise ValueError(f"Player {player} has already made all {TOTAL_ROUNDS} picks")
-        
-        pick_column_letter = chr(ord('B') + pick_index)
-        cell_to_update = f"{pick_column_letter}{row_index}"
-        draft_worksheet.update(cell_to_update, [[golfer]], value_input_option='RAW')
-        print(f"Saved pick: {player} picked {golfer} in {pick_columns[pick_index]}")
-        if 'draft_picks' in g:
-            del g.draft_picks
-    except Exception as e:
-        print(f"Error saving draft pick: {e}")
-        raise
-
 def get_current_turn():
     """Determine the current player whose turn it is based on existing picks."""
     picks = load_draft_picks()
@@ -232,21 +199,41 @@ def get_current_turn():
     
     return current_player, total_picks + 1
 
-@app.route('/')
-def home():
-    return redirect(url_for('index'))
+def save_draft_pick(player, golfer, pick_time):
+    """Save a draft pick to the Draft Board worksheet."""
+    try:
+        records = draft_worksheet.get_all_records()
+        existing_picks = {record['Player']: {k: v for k, v in record.items() if k in ['Pick 1', 'Pick 2', 'Pick 3']} for record in records}
+        if player in existing_picks and any(existing_picks[player].values()):
+            round_num = int(pick_time.split()[1])
+            pick_key = f'Pick {round_num}'
+            if existing_picks[player].get(pick_key):
+                print(f"Pick already exists for {player} in {pick_key}")
+                return False
+            draft_worksheet.update_cell(records.index([r for r in records if r['Player'] == player][0]) + 2, ['Pick 1', 'Pick 2', 'Pick 3'].index(pick_key) + 2, golfer)
+        else:
+            draft_worksheet.append_row([player, '', '', '', ''])
+            draft_worksheet.update_cell(draft_worksheet.row_count, 2, golfer)  # Assuming Pick 1 is column 2
+        return True
+    except Exception as e:
+        print(f"Error saving draft pick: {e}")
+        return False
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
-        if username in users and users[username] == password:
+        if username in USER_PASSWORDS and USER_PASSWORDS[username] == password:
             session['username'] = username
             return redirect(url_for('index'))
-        else:
-            return render_template('login.html', error="Invalid username or password")
+        return render_template('login.html', error="Invalid username or password")
     return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('login'))
 
 @app.route('/index')
 def index():
@@ -255,6 +242,7 @@ def index():
     picks = load_draft_picks()
     print(f"Loaded picks: {picks}")
     current_player, current_pick_number = get_current_turn()
+    print(f"Current player: {current_player}, Current pick number: {current_pick_number}")
     
     picked_golfers = [pick['Golfer'] for pick in picks]
     print(f"Picked golfers: {picked_golfers}")
@@ -272,115 +260,80 @@ def index():
     return render_template('index.html', golfers=available_golfers, picks=picks,
                           current_player=current_player, current_pick_number=current_pick_number,
                           draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
-                          participants=get_draft_order(), player_picks=player_picks)
+                          participants=get_draft_order(), player_picks=player_picks, username=session.get('username'))
 
 @app.route('/draft_state')
 def draft_state():
-    golfers = load_golfers()
     picks = load_draft_picks()
     current_player, current_pick_number = get_current_turn()
-    
+    golfers = load_golfers()
     picked_golfers = [pick['Golfer'] for pick in picks]
     available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
-    
     player_picks = {player: [] for player in PLAYERS}
     for pick in picks:
         player = pick['Player']
         if player in player_picks:
             player_picks[player].append(pick)
-    
-    return jsonify({
+    return {
         'current_player': current_player,
         'current_pick_number': current_pick_number,
-        'available_golfers': available_golfers,
         'picks': picks,
+        'available_golfers': available_golfers,
         'player_picks': player_picks,
         'draft_complete': current_player is None
-    })
+    }
 
 @app.route('/pick', methods=['POST'])
 def pick():
     if 'username' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
+        return {'success': False, 'error': 'Not logged in'}, 401
+    username = session['username']
+    player = USER_PLAYER_MAPPING.get(username)
+    if not player:
+        return {'success': False, 'error': 'Invalid user'}, 400
     
     golfer = request.form.get('golfer')
-    current_player, _ = get_current_turn()
-    logged_in_user = session['username']
-    assigned_player = USER_PLAYER_MAPPING.get(logged_in_user)
-    
     if not golfer:
-        return jsonify({'error': 'No golfer selected'}), 400
-    
-    if not current_player:
-        return jsonify({'error': 'Draft is complete or no current turn'}), 400
-    
-    if not DEBUG_MODE and assigned_player != current_player:
-        return jsonify({'error': 'You can only pick for your assigned player'}), 403
+        return {'success': False, 'error': 'No golfer selected'}, 400
     
     picks = load_draft_picks()
-    picked_golfers = [p['Golfer'] for p in picks]
-    if golfer in picked_golfers:
-        return jsonify({'error': 'Golfer already picked'}), 400
+    current_player, _ = get_current_turn()
+    if current_player != player:
+        return {'success': False, 'error': 'Not your turn'}, 403
     
-    try:
-        pick_time = f"Round {sum(1 for p in picks if p['Player'] == current_player) + 1} (No timestamp)"
-        save_draft_pick(current_player, golfer, pick_time)
-    except Exception as e:
-        return jsonify({'error': f'Failed to save pick: {str(e)}'}), 500
-    
-    return jsonify({'success': True, 'golfer': golfer, 'player': current_player, 'pick_time': pick_time})
+    pick_time = f"Round {sum(1 for p in picks if p['Player'] == player) + 1} (No timestamp)"
+    if save_draft_pick(player, golfer, pick_time):
+        return {'success': True, 'player': player, 'golfer': golfer, 'pick_time': pick_time}
+    return {'success': False, 'error': 'Failed to save pick'}, 500
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
+    if 'username' not in session:
+        return {'success': False, 'error': 'Not logged in'}, 401
+    username = session['username']
+    player = USER_PLAYER_MAPPING.get(username)
+    if not player:
+        return {'success': False, 'error': 'Invalid user'}, 400
+    
+    picks = load_draft_picks()
     current_player, _ = get_current_turn()
-    
-    if not current_player:
-        return jsonify({'error': 'Draft is complete or no current turn'}), 400
-    
-    if 'username' in session:
-        logged_in_user = session['username']
-        assigned_player = USER_PLAYER_MAPPING.get(logged_in_user)
-        if not DEBUG_MODE and assigned_player != current_player:
-            return jsonify({'error': 'You can only autopick for your assigned player'}), 403
+    if current_player != player:
+        return {'success': False, 'error': 'Not your turn'}, 403
     
     golfers = load_golfers()
-    picks = load_draft_picks()
-    picked_golfers = [p['Golfer'] for p in picks]
+    if not golfers:
+        return {'success': False, 'error': 'No golfers available'}, 400
     
-    available_golfers = [g for g in golfers if g['Golfer Name'] not in picked_golfers]
+    picked_golfers = {pick['Golfer'] for pick in picks}
+    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
     if not available_golfers:
-        return jsonify({'error': 'No golfers available'}), 400
+        return {'success': False, 'error': 'No golfers left'}, 400
     
-    selected_golfer = min(available_golfers, key=lambda x: x['Ranking'])['Golfer Name']
-    
-    try:
-        pick_time = f"Round {sum(1 for p in picks if p['Player'] == current_player) + 1} (No timestamp)"
-        save_draft_pick(current_player, selected_golfer, pick_time)
-    except Exception as e:
-        return jsonify({'error': f'Failed to save autopick: {str(e)}'}), 500
-    
-    return jsonify({'success': True, 'golfer': selected_golfer, 'player': current_player, 'pick_time': pick_time})
-
-@app.route('/setup', methods=['GET'])
-def setup():
-    if 'username' not in session or session['username'] != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    
-    try:
-        draft_worksheet.clear()
-        draft_worksheet.append_row(['Player', 'Pick 1', 'Pick 2', 'Pick 3', 'Draft Order'])
-        
-        for i, player in enumerate(PLAYERS, 1):
-            draft_worksheet.append_row([player, '', '', '', str(i)])
-        
-        return jsonify({'success': True, 'message': 'Draft Board initialized with all players'})
-    except Exception as e:
-        return jsonify({'error': f'Failed to setup Draft Board: {str(e)}'}), 500
-
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect(url_for('index'))
+    golfer = sorted(available_golfers, key=lambda x: next((g['Ranking'] for g in golfers if g['Golfer Name'] == x), 999))[0]
+    pick_time = f"Round {sum(1 for p in picks if p['Player'] == player) + 1} (No timestamp)"
+    if save_draft_pick(player, golfer, pick_time):
+        return {'success': True, 'player': player, 'golfer': golfer, 'pick_time': pick_time}
+    return {'success': False, 'error': 'Failed to save autopick'}, 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=DEBUG_MODE)

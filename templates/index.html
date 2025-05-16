@@ -46,6 +46,8 @@
                     </select>
                     <button id="pick-button" class="bg-blue-500 text-white px-4 py-2 rounded ml-2">Pick Golfer</button>
                 </div>
+            {% else %}
+                <p class="mb-4 text-gray-600">Not your turn—please wait!</p>
             {% endif %}
         {% endif %}
 
