@@ -200,20 +200,40 @@ def get_current_turn():
     return current_player, total_picks + 1
 
 def save_draft_pick(player, golfer, pick_time):
-    """Save a draft pick to the Draft Board worksheet."""
+    """Save a draft pick to the Draft Board worksheet in the player's existing row."""
     try:
+        # Get all records from the Draft Board worksheet
         records = draft_worksheet.get_all_records()
-        existing_picks = {record['Player']: {k: v for k, v in record.items() if k in ['Pick 1', 'Pick 2', 'Pick 3']} for record in records}
-        if player in existing_picks and any(existing_picks[player].values()):
-            round_num = int(pick_time.split()[1])
-            pick_key = f'Pick {round_num}'
-            if existing_picks[player].get(pick_key):
-                print(f"Pick already exists for {player} in {pick_key}")
-                return False
-            draft_worksheet.update_cell(records.index([r for r in records if r['Player'] == player][0]) + 2, ['Pick 1', 'Pick 2', 'Pick 3'].index(pick_key) + 2, golfer)
-        else:
-            draft_worksheet.append_row([player, '', '', '', ''])
-            draft_worksheet.update_cell(draft_worksheet.row_count, 2, golfer)  # Assuming Pick 1 is column 2
+        player_row = None
+        row_index = None
+
+        # Find the player's existing row (should be in rows 2 to 11)
+        for i, record in enumerate(records):
+            if record['Player'] == player:
+                player_row = record
+                row_index = i + 2  # +2 because records start at row 2 (row 1 is headers)
+                break
+
+        if not player_row:
+            print(f"Player {player} not found in Draft Board worksheet")
+            return False
+
+        # Determine the pick number from pick_time (e.g., "Round 1 (No timestamp)" -> 1)
+        round_num = int(pick_time.split()[1])
+        pick_key = f'Pick {round_num}'
+
+        # Check if the pick already exists for this round
+        if player_row.get(pick_key):
+            print(f"Pick already exists for {player} in {pick_key}")
+            return False
+
+        # Update the existing row with the new pick
+        col_index = ['Pick 1', 'Pick 2', 'Pick 3'].index(pick_key) + 2  # Column B=2, C=3, D=4
+        draft_worksheet.update_cell(row_index, col_index, golfer)
+
+        # Invalidate cache to ensure draft picks are reloaded
+        if 'draft_picks' in g:
+            del g['draft_picks']
         return True
     except Exception as e:
         print(f"Error saving draft pick: {e}")
