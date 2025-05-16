@@ -91,7 +91,7 @@ def get_draft_order():
 def load_golfers():
     """Load golfers from the Golfers worksheet with caching."""
     if 'golfers' in g:
-        return g.golfers
+        return g['golfers']
     try:
         all_values = worksheet.get_all_values()
         
@@ -115,8 +115,8 @@ def load_golfers():
             print("Warning: Golfers worksheet has no golfers")
             return []
         
-        g.golfers = sorted(records, key=lambda x: x['Ranking'])
-        return g.golfers
+        g['golfers'] = sorted(records, key=lambda x: x['Ranking'])
+        return g['golfers']
     except Exception as e:
         print(f"Error loading golfers: {e}")
         raise
@@ -125,7 +125,7 @@ def load_golfers():
 def load_draft_picks():
     """Load draft picks from the Draft Board worksheet with caching."""
     if 'draft_picks' in g:
-        return g.draft_picks
+        return g['draft_picks']
     try:
         all_values = draft_worksheet.get_all_values()
         
@@ -162,8 +162,8 @@ def load_draft_picks():
             int(x['Pick Time'].split()[1])
         ))
         
-        g.draft_picks = picks
-        return g.draft_picks
+        g['draft_picks'] = picks
+        return g['draft_picks']
     except Exception as e:
         print(f"Error loading draft picks: {e}")
         raise
