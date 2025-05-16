@@ -268,7 +268,8 @@ def index():
     return render_template('index.html', golfers=available_golfers, picks=picks,
                           current_player=current_player, current_pick_number=current_pick_number,
                           draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
-                          participants=get_draft_order(), player_picks=player_picks, username=session.get('username'))
+                          participants=get_draft_order(), player_picks=player_picks,
+                          username=session.get('username'), USER_PLAYER_MAPPING=USER_PLAYER_MAPPING)
 
 @app.route('/draft_state')
 def draft_state():
