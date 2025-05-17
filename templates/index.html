@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fantasy Golf Draft - PGA Championship</title>
+    <title>Fantasy Golf Draft - U.S. Open</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .table-container { max-height: 400px; overflow-y: auto; }
@@ -12,7 +12,7 @@
 </head>
 <body class="bg-gray-100">
     <div class="container mx-auto p-4">
-        <h1 class="text-3xl font-bold mb-4">Fantasy Golf Draft - PGA Championship</h1>
+        <h1 class="text-3xl font-bold mb-4">Fantasy Golf Draft - U.S. Open</h1>
         <div class="mb-4">
             {% if username %}
                 <span class="font-semibold">Logged in as: {{ username }}</span>
@@ -93,7 +93,7 @@
         <div class="mt-4 p-4 bg-yellow-100 border border-yellow-400 rounded">
             <h3 class="font-bold">How to Play</h3>
             <ul class="list-disc pl-5">
-                <li>Join the draft starting at 8 PM tonight!</li>
+                <li>Join the draft starting at 8 PM EDT on June 12, 2025!</li>
                 <li>Log in with your assigned username and pick only when it’s your turn.</li>
                 <li>Each pick has a 3-minute timer—miss it, and an auto-pick grabs the top-ranked golfer.</li>
                 <li>Choose 3 golfers total, tracked in the Players and Picks table.</li>
@@ -105,32 +105,8 @@
 
     <script>
         const draftOrder = {{ participants | tojson }};
-        const timerSeconds = {{ timer_seconds }};
-        let timeLeft = timerSeconds;
-        let timerInterval = null;
         const draftComplete = {{ draft_complete | tojson }};
         let lastPickCount = {{ picks | length }};
-
-        function startTimer() {
-            if (draftComplete) return;
-
-            timerInterval = setInterval(() => {
-                timeLeft--;
-                document.getElementById('timer').textContent = timeLeft;
-
-                if (timeLeft <= 0) {
-                    clearInterval(timerInterval);
-                    triggerAutopick();
-                }
-            }, 1000);
-        }
-
-        function resetTimer() {
-            clearInterval(timerInterval);
-            timeLeft = timerSeconds;
-            document.getElementById('timer').textContent = timeLeft;
-            startTimer();
-        }
 
         function triggerAutopick() {
             fetch('/autopick', {
@@ -192,8 +168,16 @@
 
                         const currentPlayerElement = document.getElementById('current-player');
                         const currentPickNumberElement = document.getElementById('current-pick-number');
+                        const timerElement = document.getElementById('timer');
                         currentPlayerElement.textContent = data.current_player || '';
                         currentPickNumberElement.textContent = data.current_pick_number || '';
+                        timerElement.textContent = data.remaining_time;
+
+                        // Trigger autopick if time runs out
+                        if (data.remaining_time <= 0 && !data.draft_complete) {
+                            triggerAutopick();
+                            return;
+                        }
 
                         const golferSelect = document.getElementById('golfer-select');
                         if (golferSelect) {
@@ -234,7 +218,8 @@
                         if (data.draft_complete) {
                             location.reload();
                         } else {
-                            resetTimer();
+                            // Continue polling for updates
+                            setTimeout(updateCurrentTurn, 1000);
                         }
                     })
                     .catch(error => {
@@ -243,7 +228,7 @@
                             attempts++;
                             setTimeout(checkState, 1000);
                         } else {
-                            resetTimer();
+                            setTimeout(updateCurrentTurn, 1000);
                         }
                     });
             };
@@ -293,7 +278,7 @@
             });
 
             if (!draftComplete) {
-                startTimer();
+                updateCurrentTurn();
             }
         };
     </script>

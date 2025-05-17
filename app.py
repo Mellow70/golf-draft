@@ -1,45 +1,42 @@
-import os
-from flask import Flask, render_template, request, session, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 from flask_session import Session
-from google.oauth2 import service_account
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import gspread
-from datetime import datetime
 import backoff
-from collections import defaultdict
-import json
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
+import os
+from dotenv import load_dotenv
 
-app = Flask(__name__)
+# Load environment variables
+load_dotenv()
+SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
+SERVICE_ACCOUNT_FILE = os.getenv('SERVICE_ACCOUNT_FILE')
+PORT = int(os.getenv('PORT', 8000))
 
-# Configure session to use filesystem
-app.config["SESSION_PERMANENT"] = False
-app.config["SESSION_TYPE"] = "filesystem"
-Session(app)
-
-# Load Google Sheets credentials from environment variable
-creds_dict = json.loads(os.environ.get('GOOGLE_CREDENTIALS', '{}'))
-scoped_credentials = service_account.Credentials.from_service_account_info(
-    creds_dict, scopes=['https://www.googleapis.com/auth/spreadsheets']
-)
-client = gspread.authorize(scoped_credentials)
-
-# Get the spreadsheet by ID from environment variable
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', 'your_spreadsheet_id_here')
-sheet = client.open_by_key(SPREADSHEET_ID)
-worksheet = sheet.worksheet("Golfers")
-draft_worksheet = sheet.worksheet("Draft Board")
-
-# Global cache using a simple dictionary (not persistent across restarts)
+# Global cache for golfers and draft picks
 g = {}
 
-# Hardcoded users and passwords
+# Global cache for timer state
+timer_state = {'start_time': None}
+
+# Define constants
+TIMER_SECONDS = 180  # 3 minutes in seconds
+PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony']
 USER_PASSWORDS = {
     'user1': 'Player1-PGA2025',
     'user2': 'Player2-PGA2025',
+    'user3': 'Player3-PGA2025',
+    'user4': 'Player4-PGA2025',
+    'user5': 'Player5-PGA2025',
+    'user6': 'Player6-PGA2025',
+    'user7': 'Player7-PGA2025',
+    'user8': 'Player8-PGA2025',
+    'user9': 'Player9-PGA2025',
+    'user10': 'Player10-PGA2025',
     'admin': 'admin'
 }
-
-# User-to-player mapping
 USER_PLAYER_MAPPING = {
     'user1': 'Alex',
     'user2': 'Liz',
@@ -50,42 +47,39 @@ USER_PLAYER_MAPPING = {
     'user7': 'Stephen',
     'user8': 'Mel',
     'user9': 'Brandon',
-    'user10': 'Tony',
+    'user10': 'Tony'
 }
 
-# Debug mode for testing
-DEBUG_MODE = True
+# Set up Flask app
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.urandom(24)
+app.config['SESSION_TYPE'] = 'filesystem'
+Session(app)
 
-# List of players (used as a fallback)
-PLAYERS = ['Alex', 'Liz', 'Eric', 'Jed', 'Stacie', 'Jason', 'Stephen', 'Mel', 'Brandon', 'Tony']
-TOTAL_ROUNDS = 3
-PICKS_PER_PLAYER = TOTAL_ROUNDS
-TIMER_SECONDS = 180
-TOURNAMENT = "PGA Championship"
+# Set up Google Sheets API
+scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+gc = gspread.authorize(creds)
+sheet = gc.open_by_key(SPREADSHEET_ID)
+worksheet = sheet.worksheet('Golfers')
+draft_worksheet = sheet.worksheet('Draft Board')
 
 def get_draft_order():
-    """Generate the draft order based on the Draft Order column in the Draft Board."""
-    try:
-        records = draft_worksheet.get_all_records()
-        if not records:
-            print("Draft Board worksheet has no players; using default order")
-            return PLAYERS
-        
-        # Filter out generic players (e.g., 'PlayerXX')
-        actual_players = [record for record in records if not record['Player'].startswith('Player')]
-        sorted_players = sorted(actual_players, key=lambda x: int(x['Draft Order']) if x['Draft Order'] else 999)
-        players = [record['Player'] for record in sorted_players if record['Player']]
-        
-        order = []
-        for round_num in range(TOTAL_ROUNDS):
-            if round_num % 2 == 0:
-                order.extend(players)
-            else:
-                order.extend(reversed(players))
-        return order
-    except Exception as e:
-        print(f"Error generating draft order: {e}")
+    """Get the draft order from the Draft Board worksheet."""
+    records = draft_worksheet.get_all_records()
+    if not records:
         return PLAYERS
+    order = [r['Player'] for r in records if 'Draft Order' in r and r['Draft Order']]
+    return sorted(order, key=lambda x: int(x['Draft Order'])) if order else PLAYERS
+
+def get_current_turn():
+    """Determine the current player and pick number based on draft order and picks made."""
+    picks = load_draft_picks()
+    draft_order = get_draft_order()
+    pick_count = len(picks) // len(draft_order) + 1
+    player_index = (len(picks) % len(draft_order))
+    current_player = draft_order[player_index] if player_index < len(draft_order) else None
+    return current_player, pick_count if current_player else (None, None)
 
 @backoff.on_exception(backoff.expo, Exception, max_tries=3, giveup=lambda e: not str(e).startswith('[429]'))
 def load_golfers():
@@ -168,37 +162,6 @@ def load_draft_picks():
         print(f"Error loading draft picks: {e}")
         raise
 
-def get_current_turn():
-    """Determine the current player whose turn it is based on existing picks."""
-    picks = load_draft_picks()
-    total_picks = len(picks)
-    if total_picks >= len(PLAYERS) * PICKS_PER_PLAYER:
-        return None, None
-    
-    draft_order = get_draft_order()
-    if not draft_order:
-        return None, None
-    
-    current_position = total_picks % len(draft_order)
-    current_player = draft_order[current_position]
-    
-    player_picks = sum(1 for pick in picks if pick['Player'] == current_player)
-    if player_picks >= PICKS_PER_PLAYER:
-        next_position = (current_position + 1) % len(draft_order)
-        attempts = 0
-        while attempts < len(draft_order):
-            next_player = draft_order[next_position]
-            next_player_picks = sum(1 for pick in picks if pick['Player'] == next_player)
-            if next_player_picks < PICKS_PER_PLAYER:
-                current_player = next_player
-                break
-            next_position = (next_position + 1) % len(draft_order)
-            attempts += 1
-        else:
-            return None, None
-    
-    return current_player, total_picks + 1
-
 def save_draft_pick(player, golfer, pick_time):
     """Save a draft pick to the Draft Board worksheet in the player's existing row."""
     try:
@@ -239,26 +202,6 @@ def save_draft_pick(player, golfer, pick_time):
         print(f"Error saving draft pick: {e}")
         return False
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        print(f"Login attempt: username={username}, password={password}")
-        if username in USER_PASSWORDS and USER_PASSWORDS[username] == password:
-            session['username'] = username
-            print(f"Login successful for {username}, redirecting to index")
-            return redirect(url_for('index'))
-        print(f"Login failed for {username}: invalid credentials")
-        return render_template('login.html', error="Invalid username or password")
-    print("Rendering login page for GET request")
-    return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
-
 @app.route('/')
 def root():
     return redirect(url_for('index'))
@@ -285,32 +228,41 @@ def index():
     
     draft_complete = current_player is None
     
+    # Initialize timer if not started and draft is not complete
+    if timer_state['start_time'] is None and not draft_complete:
+        timer_state['start_time'] = datetime.utcnow()
+    
+    # Calculate initial remaining time
+    initial_remaining_time = TIMER_SECONDS
+    if timer_state['start_time'] and not draft_complete:
+        elapsed = (datetime.utcnow() - timer_state['start_time']).total_seconds()
+        initial_remaining_time = max(0, int(TIMER_SECONDS - elapsed))
+    
     return render_template('index.html', golfers=available_golfers, picks=picks,
                           current_player=current_player, current_pick_number=current_pick_number,
-                          draft_complete=draft_complete, timer_seconds=TIMER_SECONDS,
+                          draft_complete=draft_complete, timer_seconds=initial_remaining_time,
                           participants=get_draft_order(), player_picks=player_picks,
                           username=session.get('username'), USER_PLAYER_MAPPING=USER_PLAYER_MAPPING)
 
-@app.route('/draft_state')
-def draft_state():
-    picks = load_draft_picks()
-    current_player, current_pick_number = get_current_turn()
-    golfers = load_golfers()
-    picked_golfers = [pick['Golfer'] for pick in picks]
-    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
-    player_picks = {player: [] for player in PLAYERS}
-    for pick in picks:
-        player = pick['Player']
-        if player in player_picks:
-            player_picks[player].append(pick)
-    return {
-        'current_player': current_player,
-        'current_pick_number': current_pick_number,
-        'picks': picks,
-        'available_golfers': available_golfers,
-        'player_picks': player_picks,
-        'draft_complete': current_player is None
-    }
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        print(f"Login attempt: username={username}, password={password}")
+        if username in USER_PASSWORDS and USER_PASSWORDS[username] == password:
+            session['username'] = username
+            print(f"Login successful for {username}, redirecting to index")
+            return redirect(url_for('index'))
+        print(f"Login failed for {username}: invalid credentials")
+        return render_template('login.html', error="Invalid username or password")
+    print("Rendering login page for GET request")
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('username', None)
+    return redirect(url_for('index'))
 
 @app.route('/pick', methods=['POST'])
 def pick():
@@ -332,6 +284,8 @@ def pick():
     
     pick_time = f"Round {sum(1 for p in picks if p['Player'] == player) + 1} (No timestamp)"
     if save_draft_pick(player, golfer, pick_time):
+        # Reset the timer for the next player's turn
+        timer_state['start_time'] = datetime.utcnow()
         return {'success': True, 'player': player, 'golfer': golfer, 'pick_time': pick_time}
     return {'success': False, 'error': 'Failed to save pick'}, 500
 
@@ -361,8 +315,39 @@ def autopick():
     golfer = sorted(available_golfers, key=lambda x: next((g['Ranking'] for g in golfers if g['Golfer Name'] == x), 999))[0]
     pick_time = f"Round {sum(1 for p in picks if p['Player'] == player) + 1} (No timestamp)"
     if save_draft_pick(player, golfer, pick_time):
+        # Reset the timer for the next player's turn
+        timer_state['start_time'] = datetime.utcnow()
         return {'success': True, 'player': player, 'golfer': golfer, 'pick_time': pick_time}
     return {'success': False, 'error': 'Failed to save autopick'}, 500
 
+@app.route('/draft_state')
+def draft_state():
+    picks = load_draft_picks()
+    current_player, current_pick_number = get_current_turn()
+    golfers = load_golfers()
+    picked_golfers = [pick['Golfer'] for pick in picks]
+    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in picked_golfers]
+    player_picks = {player: [] for player in PLAYERS}
+    for pick in picks:
+        player = pick['Player']
+        if player in player_picks:
+            player_picks[player].append(pick)
+    
+    # Calculate remaining time
+    remaining_time = TIMER_SECONDS
+    if timer_state['start_time'] and not (current_player is None):
+        elapsed = (datetime.utcnow() - timer_state['start_time']).total_seconds()
+        remaining_time = max(0, int(TIMER_SECONDS - elapsed))
+    
+    return {
+        'current_player': current_player,
+        'current_pick_number': current_pick_number,
+        'picks': picks,
+        'available_golfers': available_golfers,
+        'player_picks': player_picks,
+        'draft_complete': current_player is None,
+        'remaining_time': remaining_time
+    }
+
 if __name__ == '__main__':
-    app.run(debug=DEBUG_MODE)
+    app.run(host='0.0.0.0', port=PORT, debug=True)
