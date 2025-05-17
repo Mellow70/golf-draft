@@ -7,6 +7,7 @@ import backoff
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import os
+import json  # Add this line
 from dotenv import load_dotenv
 
 # Load environment variables
