@@ -58,7 +58,10 @@ Session(app)
 
 # Set up Google Sheets API
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+service_account_json = os.getenv('SERVICE_ACCOUNT_JSON')
+if not service_account_json:
+    raise ValueError("SERVICE_ACCOUNT_JSON environment variable is not set")
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(service_account_json), scope)
 gc = gspread.authorize(creds)
 sheet = gc.open_by_key(SPREADSHEET_ID)
 worksheet = sheet.worksheet('Golfers')
