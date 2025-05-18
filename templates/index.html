@@ -15,7 +15,7 @@
         <h1 class="text-3xl font-bold mb-4">Fantasy Golf Draft - U.S. Open</h1>
         <div class="mb-4">
             {% if username %}
-                <span class="font-semibold">Logged in as: {{ username }}</span>
+                <span class="font-semibold">Logged in as: {{ username }} ({{ USER_PLAYER_MAPPING[username] }})</span>
                 <a href="{{ url_for('logout') }}" class="ml-4 text-blue-500 hover:underline">Logout</a>
             {% else %}
                 <span class="font-semibold">Not logged in</span>
@@ -31,13 +31,13 @@
         {% else %}
             <div class="bg-blue-100 p-4 rounded mb-4">
                 <h2 class="text-xl font-semibold">Current Turn</h2>
-                <p>Pick <span id="current-pick-number">{{ current_pick_number if current_pick_number is not none else '' }}</span>: <span id="current-player">{{ current_player if current_player is not none else '' }}</span></p>
-                <p>Time remaining: <span id="timer">{{ timer_seconds if timer_seconds is not none else 0 }}</span> seconds</p>
+                <p>Pick <span id="current-pick-number">{{ current_pick_number if current_pick_number is not none else 'N/A' }}</span>: <span id="current-player">{{ current_player if current_player is not none else 'N/A' }}</span></p>
+                <p>Time remaining: <span id="timer">{{ timer_seconds if timer_seconds is not none else '0' }}</span> seconds</p>
             </div>
 
-            {% if username and USER_PLAYER_MAPPING[username] == current_player %}
-                <div class="mb-4">
-                    <h2 class="text-xl font-semibold">Make a Pick</h2>
+            <div class="mb-4">
+                <h2 class="text-xl font-semibold">Make a Pick</h2>
+                <div id="pick-section">
                     <select id="golfer-select" class="border p-2 rounded">
                         <option value="">Select a golfer</option>
                         {% for golfer in golfers %}
@@ -47,9 +47,7 @@
                     <button id="pick-button" class="bg-blue-500 text-white px-4 py-2 rounded ml-2">Pick Golfer</button>
                     <button id="autopick-button" class="bg-yellow-500 text-white px-4 py-2 rounded ml-2">Auto Pick</button>
                 </div>
-            {% else %}
-                <p class="mb-4 text-gray-600">Not your turn—please wait!</p>
-            {% endif %}
+            </div>
         {% endif %}
 
         <div class="mb-4">
@@ -108,26 +106,33 @@
         const draftOrder = {{ participants | tojson }};
         const draftComplete = {{ draft_complete | tojson }};
         let lastPickCount = {{ picks | length }};
+        let clientTimer = {{ timer_seconds if timer_seconds is not none else 0 }};
+        let lastServerSync = Date.now();
 
         function triggerAutopick() {
+            console.log('Triggering autopick...');
             fetch('/autopick', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
             })
-            .then(response => response.json())
+            .then(response => {
+                console.log('Autopick response status:', response.status);
+                return response.json();
+            })
             .then(data => {
                 if (data.success) {
+                    console.log('Autopick success:', data);
                     updateDraftBoard(data.player, data.golfer, data.pick_time);
                     updateCurrentTurn(data.player, data.golfer);
                 } else {
-                    console.error('Autopick failed: ' + (data.error || 'Unknown error'));
+                    console.error('Autopick failed:', data.error);
                     alert('Autopick failed: ' + (data.error || 'Unknown error'));
                     updateCurrentTurn();
                 }
             })
             .catch(error => {
                 console.error('Autopick error:', error);
-                alert('Autopick error occurred');
+                alert('Autopick error occurred: ' + error.message);
                 updateCurrentTurn();
             });
         }
@@ -143,47 +148,57 @@
             tbody.appendChild(row);
         }
 
+        function updateClientTimer() {
+            const timerElement = document.getElementById('timer');
+            clientTimer = Math.max(0, clientTimer - 1);
+            timerElement.textContent = clientTimer;
+            if (clientTimer <= 0 && !draftComplete) {
+                const currentPlayer = document.getElementById('current-player').textContent;
+                if (currentPlayer && currentPlayer !== 'N/A') {
+                    console.log('Timer reached 0, triggering autopick');
+                    triggerAutopick();
+                }
+            }
+            if (!draftComplete) {
+                setTimeout(updateClientTimer, 1000);
+            }
+        }
+
         function updateCurrentTurn(lastPlayer = null, lastGolfer = null) {
-            let attempts = 0;
-            const maxAttempts = 5;
-            const checkState = () => {
-                fetch('/draft_state')
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.error) {
-                            console.error('Error fetching draft state: ' + data.error);
-                            if (attempts < maxAttempts) {
-                                attempts++;
-                                setTimeout(checkState, 1000);
-                            }
-                            return;
-                        }
+            const startTime = Date.now();
+            console.log('Fetching draft state at:', new Date(startTime).toISOString());
+            fetch('/draft_state')
+                .then(response => {
+                    const fetchDuration = Date.now() - startTime;
+                    console.log(`Fetch took ${fetchDuration}ms`);
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.error) {
+                        console.error('Error fetching draft state:', data.error);
+                        setTimeout(updateCurrentTurn, 5000);
+                        return;
+                    }
 
-                        const lastPickFound = lastPlayer && lastGolfer && data.picks.some(p => 
-                            p.Player === lastPlayer && p.Golfer === lastGolfer
-                        );
+                    const currentPlayerElement = document.getElementById('current-player');
+                    const currentPickNumberElement = document.getElementById('current-pick-number');
+                    currentPlayerElement.textContent = data.current_player || 'N/A';
+                    currentPickNumberElement.textContent = data.current_pick_number || 'N/A';
 
-                        if (!lastPickFound && attempts < maxAttempts) {
-                            attempts++;
-                            setTimeout(checkState, 1000);
-                            return;
-                        }
+                    // Sync client timer with server
+                    const elapsedSinceLastSync = (Date.now() - lastServerSync) / 1000;
+                    clientTimer = Math.max(0, data.remaining_time - elapsedSinceLastSync);
+                    lastServerSync = Date.now();
 
-                        const currentPlayerElement = document.getElementById('current-player');
-                        const currentPickNumberElement = document.getElementById('current-pick-number');
-                        const timerElement = document.getElementById('timer');
-                        currentPlayerElement.textContent = data.current_player || '';
-                        currentPickNumberElement.textContent = data.current_pick_number || '';
-                        timerElement.textContent = data.remaining_time;
-
-                        // Trigger autopick if time runs out
-                        if (data.remaining_time <= 0 && !data.draft_complete && data.current_player) {
-                            triggerAutopick();
-                            return;
-                        }
-
-                        const golferSelect = document.getElementById('golfer-select');
-                        if (golferSelect) {
+                    // Update dropdown visibility
+                    const pickSection = document.getElementById('pick-section');
+                    const loggedInUser = {{ username | tojson }};
+                    const userPlayer = {{ USER_PLAYER_MAPPING | tojson }}[loggedInUser];
+                    console.log('Logged in user:', loggedInUser, 'Mapped to:', userPlayer, 'Current player:', data.current_player);
+                    if (pickSection) {
+                        if (loggedInUser && userPlayer === data.current_player) {
+                            pickSection.style.display = 'block';
+                            const golferSelect = document.getElementById('golfer-select');
                             golferSelect.innerHTML = '<option value="">Select a golfer</option>';
                             data.available_golfers.forEach(golfer => {
                                 const option = document.createElement('option');
@@ -191,51 +206,46 @@
                                 option.textContent = golfer;
                                 golferSelect.appendChild(option);
                             });
-                        }
-
-                        const draftBoard = document.getElementById('draft-board');
-                        draftBoard.innerHTML = '';
-                        data.picks.forEach(pick => {
-                            const row = document.createElement('tr');
-                            row.innerHTML = `
-                                <td class="border p-2">${pick.Player}</td>
-                                <td class="border p-2">${pick.Golfer}</td>
-                                <td class="border p-2">${pick['Pick Time']}</td>
-                            `;
-                            draftBoard.appendChild(row);
-                        });
-
-                        const playersPicks = document.getElementById('players-picks');
-                        playersPicks.innerHTML = '';
-                        const sortedPlayers = draftOrder.filter(player => player in data.player_picks);
-                        sortedPlayers.forEach(player => {
-                            const row = document.createElement('tr');
-                            const picks = data.player_picks[player].map(p => p.Golfer).join(', ') || 'N/A';
-                            row.innerHTML = `
-                                <td class="border p-2">${player}</td>
-                                <td class="border p-2">${picks}</td>
-                            `;
-                            playersPicks.appendChild(row);
-                        });
-
-                        if (data.draft_complete) {
-                            location.reload();
                         } else {
-                            // Poll every 1 second
-                            setTimeout(updateCurrentTurn, 1000);
+                            pickSection.style.display = 'none';
                         }
-                    })
-                    .catch(error => {
-                        console.error('Error fetching draft state:', error);
-                        if (attempts < maxAttempts) {
-                            attempts++;
-                            setTimeout(checkState, 1000);
-                        } else {
-                            setTimeout(updateCurrentTurn, 1000);
-                        }
+                    }
+
+                    const draftBoard = document.getElementById('draft-board');
+                    draftBoard.innerHTML = '';
+                    data.picks.forEach(pick => {
+                        const row = document.createElement('tr');
+                        row.innerHTML = `
+                            <td class="border p-2">${pick.Player}</td>
+                            <td class="border p-2">${pick.Golfer}</td>
+                            <td class="border p-2">${pick['Pick Time']}</td>
+                        `;
+                        draftBoard.appendChild(row);
                     });
-            };
-            checkState();
+
+                    const playersPicks = document.getElementById('players-picks');
+                    playersPicks.innerHTML = '';
+                    const sortedPlayers = draftOrder.filter(player => player in data.player_picks);
+                    sortedPlayers.forEach(player => {
+                        const row = document.createElement('tr');
+                        const picks = data.player_picks[player].map(p => p.Golfer).join(', ') || 'N/A';
+                        row.innerHTML = `
+                            <td class="border p-2">${player}</td>
+                            <td class="border p-2">${picks}</td>
+                        `;
+                        playersPicks.appendChild(row);
+                    });
+
+                    if (data.draft_complete) {
+                        location.reload();
+                    } else {
+                        setTimeout(updateCurrentTurn, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching draft state:', error);
+                    setTimeout(updateCurrentTurn, 5000);
+                });
         }
 
         document.getElementById('pick-button')?.addEventListener('click', () => {
@@ -286,6 +296,7 @@
 
             if (!draftComplete) {
                 updateCurrentTurn();
+                updateClientTimer();
             }
         };
     </script>
