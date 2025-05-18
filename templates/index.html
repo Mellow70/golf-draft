@@ -31,8 +31,8 @@
         {% else %}
             <div class="bg-blue-100 p-4 rounded mb-4">
                 <h2 class="text-xl font-semibold">Current Turn</h2>
-                <p>Pick <span id="current-pick-number">{{ current_pick_number }}</span>: <span id="current-player">{{ current_player }}</span></p>
-                <p>Time remaining: <span id="timer">{{ timer_seconds }}</span> seconds</p>
+                <p>Pick <span id="current-pick-number">{{ current_pick_number if current_pick_number is not none else '' }}</span>: <span id="current-player">{{ current_player if current_player is not none else '' }}</span></p>
+                <p>Time remaining: <span id="timer">{{ timer_seconds if timer_seconds is not none else 0 }}</span> seconds</p>
             </div>
 
             {% if username and USER_PLAYER_MAPPING[username] == current_player %}
@@ -45,6 +45,7 @@
                         {% endfor %}
                     </select>
                     <button id="pick-button" class="bg-blue-500 text-white px-4 py-2 rounded ml-2">Pick Golfer</button>
+                    <button id="autopick-button" class="bg-yellow-500 text-white px-4 py-2 rounded ml-2">Auto Pick</button>
                 </div>
             {% else %}
                 <p class="mb-4 text-gray-600">Not your turn—please wait!</p>
@@ -120,11 +121,13 @@
                     updateCurrentTurn(data.player, data.golfer);
                 } else {
                     console.error('Autopick failed: ' + (data.error || 'Unknown error'));
+                    alert('Autopick failed: ' + (data.error || 'Unknown error'));
                     updateCurrentTurn();
                 }
             })
             .catch(error => {
                 console.error('Autopick error:', error);
+                alert('Autopick error occurred');
                 updateCurrentTurn();
             });
         }
@@ -174,7 +177,7 @@
                         timerElement.textContent = data.remaining_time;
 
                         // Trigger autopick if time runs out
-                        if (data.remaining_time <= 0 && !data.draft_complete) {
+                        if (data.remaining_time <= 0 && !data.draft_complete && data.current_player) {
                             triggerAutopick();
                             return;
                         }
@@ -218,7 +221,7 @@
                         if (data.draft_complete) {
                             location.reload();
                         } else {
-                            // Continue polling for updates
+                            // Poll every 1 second
                             setTimeout(updateCurrentTurn, 1000);
                         }
                     })
@@ -261,6 +264,10 @@
                 console.error('Pick error:', error);
                 updateCurrentTurn();
             });
+        });
+
+        document.getElementById('autopick-button')?.addEventListener('click', () => {
+            triggerAutopick();
         });
 
         window.onload = function() {
