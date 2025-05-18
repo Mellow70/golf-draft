@@ -70,11 +70,18 @@ draft_worksheet = sheet.worksheet('Draft Board')
 
 def get_draft_order():
     """Get the draft order from the Draft Board worksheet."""
-    records = draft_worksheet.get_all_records()
-    if not records:
+    try:
+        records = draft_worksheet.get_all_records()
+        if not records:
+            return PLAYERS
+        order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
+        if not order:
+            return PLAYERS
+        # Ensure 'Draft Order' is an integer or convertible to int
+        return sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip()))) if order else PLAYERS
+    except (ValueError, KeyError, TypeError):
+        print("Error parsing draft order: invalid data format, falling back to default order")
         return PLAYERS
-    order = [r['Player'] for r in records if 'Draft Order' in r and r['Draft Order']]
-    return sorted(order, key=lambda x: int(x['Draft Order'])) if order else PLAYERS
 
 def get_current_turn():
     """Determine the current player and pick number based on draft order and picks made."""
