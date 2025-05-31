@@ -154,7 +154,7 @@ def index():
     # Ensure current_player is a string
     current_player = str(current_player) if current_player else 'N/A'
 
-    # Fix: Iterate over player names in player_picks instead of draft_order
+    # Iterate over player names in player_picks instead of draft_order
     draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
 
     return render_template(
@@ -167,7 +167,8 @@ def index():
         draft_complete=draft_complete,
         current_player=current_player,
         current_pick_number=current_pick_number,
-        timer_seconds=remaining_time
+        timer_seconds=remaining_time,
+        user_player_mapping=USER_PLAYER_MAPPING  # Pass USER_PLAYER_MAPPING to template
     )
 
 @app.route('/login', methods=['GET', 'POST'])
