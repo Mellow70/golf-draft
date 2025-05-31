@@ -91,7 +91,7 @@
                 {% for player, picks in player_picks.items() %}
                     <p>{{ player }}'s Picks: 
                         {% for pick in picks %}
-                            {{ pick.Golfer }} (Pick {{ pick.Pick Number }})
+                            {{ pick['Golfer'] }} (Pick {{ pick['Pick Number'] }})
                         {% endfor %}
                     </p>
                 {% endfor %}
