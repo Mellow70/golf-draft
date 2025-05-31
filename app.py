@@ -77,7 +77,6 @@ def load_draft_picks():
         picks = []
         for record in records:
             player = record.get('Player')
-            pick_time = record.get('Pick Time', '')
             for pick_num in range(1, 4):
                 pick_key = f'Pick {pick_num}'
                 golfer = record.get(pick_key)
@@ -85,7 +84,6 @@ def load_draft_picks():
                     picks.append({
                         'Player': player,
                         'Golfer': golfer,
-                        'Pick Time': pick_time,
                         'Pick Number': pick_num
                     })
         print(f"Loaded draft picks: {picks}")
@@ -113,19 +111,7 @@ def get_current_turn(picks, draft_order):
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
-                # Check if there's a previous pick to calculate remaining time
-                player_picks_list = player_picks[player_name]
-                if player_picks_list:
-                    last_pick = player_picks_list[-1]
-                    pick_time_str = last_pick.get('Pick Time', '')
-                    try:
-                        pick_time = datetime.strptime(pick_time_str, '%Y-%m-%d %H:%M:%S')
-                        elapsed = (datetime.now() - pick_time).total_seconds()
-                        remaining_time = max(0, TURN_DURATION - elapsed)
-                    except ValueError:
-                        remaining_time = TURN_DURATION
-                else:
-                    remaining_time = TURN_DURATION
+                remaining_time = TURN_DURATION  # Default to full duration since we don't store pick times
                 print(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
                 return player_name, pick_number, remaining_time
 
@@ -168,7 +154,7 @@ def index():
         current_player=current_player,
         current_pick_number=current_pick_number,
         timer_seconds=remaining_time,
-        user_player_mapping=USER_PLAYER_MAPPING  # Pass USER_PLAYER_MAPPING to template
+        user_player_mapping=USER_PLAYER_MAPPING
     )
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -211,20 +197,17 @@ def pick():
     if golfer not in available_golfers:
         return jsonify({'error': 'Golfer not available'}), 400
 
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
     if not player_row:
         return jsonify({'error': 'Player not found in draft board'}), 400
 
     column = f'Pick {current_pick_number}'
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
-    draft_worksheet.update_cell(player_row, draft_worksheet.find('Pick Time').col, pick_time)
 
     return jsonify({
         'success': True,
         'player': user_player,
-        'golfer': golfer,
-        'pick_time': pick_time
+        'golfer': golfer
     })
 
 @app.route('/autopick', methods=['POST'])
@@ -249,7 +232,6 @@ def autopick():
         return jsonify({'error': 'No golfers available'}), 400
 
     golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
     if not player_row:
@@ -257,13 +239,11 @@ def autopick():
 
     column = f'Pick {current_pick_number}'
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
-    draft_worksheet.update_cell(player_row, draft_worksheet.find('Pick Time').col, pick_time)
 
     return jsonify({
         'success': True,
         'player': user_player,
-        'golfer': golfer,
-        'pick_time': pick_time
+        'golfer': golfer
     })
 
 @app.route('/draft_state', methods=['GET'])
