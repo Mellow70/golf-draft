@@ -28,10 +28,8 @@ sheet = gc.open_by_key(SPREADSHEET_ID)
 worksheet = sheet.worksheet('Golfers')
 draft_worksheet = sheet.worksheet('Draft Board')
 
-# Updated to match the 'Player' column in the 'Draft Board' worksheet
 PLAYERS = ['Alex', 'Liz', 'Mel', 'Eric', 'Jed', 'Stacie', 'Tony', 'Brandon', 'Ryan']
 
-# Updated to match the 'Player' column in the 'Draft Board' worksheet
 USER_PLAYER_MAPPING = {
     'user1': 'Alex', 'user2': 'Liz', 'user3': 'Mel', 'user4': 'Eric', 'user5': 'Jed',
     'user6': 'Stacie', 'user7': 'Tony', 'user8': 'Brandon', 'user9': 'Ryan',
@@ -50,14 +48,18 @@ def get_draft_order():
     try:
         records = draft_worksheet.get_all_records()
         if not records:
+            print("No records found in Draft Board, using default PLAYERS")
             return PLAYERS
         order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
         if not order:
+            print("No valid draft order entries, using default PLAYERS")
             return PLAYERS
         # Ensure 'Draft Order' is an integer or convertible to int
-        return sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip()))) if order else PLAYERS
-    except (ValueError, KeyError, TypeError):
-        print("Error parsing draft order: invalid data format, falling back to default order")
+        sorted_order = sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip())))
+        print(f"Draft order: {sorted_order}")
+        return sorted_order if order else PLAYERS
+    except (ValueError, KeyError, TypeError) as e:
+        print(f"Error parsing draft order: {str(e)}, falling back to default order")
         return PLAYERS
 
 @backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=5)
@@ -71,8 +73,23 @@ def load_golfers():
 def load_draft_picks():
     """Load draft picks from the Google Sheet."""
     try:
-        picks = draft_worksheet.get_all_records()
-        return [pick for pick in picks if pick['Golfer']]  # Only include picks with a golfer
+        records = draft_worksheet.get_all_records()
+        picks = []
+        for record in records:
+            player = record.get('Player')
+            pick_time = record.get('Pick Time', '')
+            for pick_num in range(1, 4):
+                pick_key = f'Pick {pick_num}'
+                golfer = record.get(pick_key)
+                if golfer:  # Only include non-empty picks
+                    picks.append({
+                        'Player': player,
+                        'Golfer': golfer,
+                        'Pick Time': pick_time,
+                        'Pick Number': pick_num
+                    })
+        print(f"Loaded draft picks: {picks}")
+        return picks
     except Exception as e:
         print(f"Error loading draft picks: {str(e)}")
         return []
@@ -80,6 +97,7 @@ def load_draft_picks():
 def get_current_turn(picks, draft_order):
     """Determine whose turn it is and the remaining time."""
     if not draft_order:
+        print("Draft order is empty")
         return None, None, TURN_DURATION
 
     player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
@@ -87,6 +105,8 @@ def get_current_turn(picks, draft_order):
         player = pick['Player']
         if player in player_picks:
             player_picks[player].append(pick)
+
+    print(f"Player picks: {player_picks}")
 
     for round_num in range(1, 4):  # 3 picks per player
         for player in draft_order:
@@ -106,8 +126,10 @@ def get_current_turn(picks, draft_order):
                         remaining_time = TURN_DURATION
                 else:
                     remaining_time = TURN_DURATION
+                print(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
                 return player_name, pick_number, remaining_time
 
+    print("No current turn, draft might be complete")
     return None, None, TURN_DURATION
 
 @app.route('/')
@@ -120,7 +142,8 @@ def index():
     golfers = load_golfers()
     picks = load_draft_picks()
     draft_order = get_draft_order()
-    player_picks = {player: [] for player in draft_order}
+    # Handle both string and dict types in draft_order
+    player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
 
     for pick in picks:
         player = pick['Player']
@@ -213,11 +236,13 @@ def autopick():
     current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
     user_player = USER_PLAYER_MAPPING.get(username)
+    print(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
     if user_player != current_player:
         return jsonify({'error': 'Not your turn'}), 403
 
     golfers = load_golfers()
     available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
+    print(f"Available golfers for autopick: {available_golfers}")
     if not available_golfers:
         return jsonify({'error': 'No golfers available'}), 400
 
@@ -250,7 +275,7 @@ def draft_state():
 
         golfers = load_golfers()
         available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
-        player_picks = {player: [] for player in draft_order}
+        player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
         for pick in picks:
             player = pick['Player']
             if player in player_picks:
