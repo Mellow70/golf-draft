@@ -154,7 +154,8 @@ def index():
     # Ensure current_player is a string
     current_player = str(current_player) if current_player else 'N/A'
 
-    draft_complete = all(len(player_picks[player]) >= 3 for player in draft_order)
+    # Fix: Iterate over player names in player_picks instead of draft_order
+    draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
 
     return render_template(
         'index.html',
@@ -281,7 +282,7 @@ def draft_state():
             if player in player_picks:
                 player_picks[player].append(pick)
 
-        draft_complete = all(len(player_picks[player]) >= 3 for player in draft_order)
+        draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
 
         return jsonify({
             'current_player': current_player,
