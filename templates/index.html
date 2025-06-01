@@ -67,11 +67,12 @@
             <h1>Fantasy Golf Draft</h1>
         </div>
         <div class="player-info">
-            <span class="font-semibold">Logged in as: {{ username }} ({{ user_player_mapping[username] }})</span>
-            {% if current_player == user_player_mapping[username] %}
-                <span class="timer" id="timer">{{ timer_seconds }}</span>
+            <span class="font-semibold">Logged in as: {{ username }} ({{ user_player_mapping[username] }})</span><br>
+            {% if current_player != 'N/A' %}
+                <span>{{ current_player }}'s turn: </span>
+                <span class="timer" id="timer"></span>
             {% else %}
-                <span>Current turn: {{ current_player }}</span>
+                <span>No active turn.</span>
             {% endif %}
         </div>
         {% if draft_complete %}
@@ -100,18 +101,24 @@
     </div>
 
     <script>
-        let timer = {{ timer_seconds }};
+        let timerSeconds = {{ timer_seconds }};
         const timerElement = document.getElementById('timer');
         const pickButton = document.getElementById('pickButton');
         const autopickButton = document.getElementById('autopickButton');
         const currentPlayer = "{{ current_player }}";
         const userPlayer = "{{ user_player_mapping[username] }}";
 
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+        }
+
         function updateTimer() {
-            if (timerElement && currentPlayer === userPlayer && timer > 0) {
-                timer--;
-                timerElement.textContent = timer;
-                if (timer === 0) {
+            if (timerElement && currentPlayer !== 'N/A' && timerSeconds > 0) {
+                timerElement.textContent = formatTime(timerSeconds);
+                timerSeconds--;
+                if (timerSeconds <= 0 && currentPlayer === userPlayer) {
                     console.log("Timer reached 0, triggering autopick...");
                     autopick();
                 }
@@ -120,21 +127,16 @@
         }
 
         function autopick() {
-            fetch('/autopick', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log("Autopick success:", data);
-                location.reload();
-            })
-            .catch(error => console.error("Autopick failed:", error));
+            // Submit the autopick form to trigger a full page reload
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/autopick';
+            document.body.appendChild(form);
+            form.submit();
         }
 
-        if (timerElement && currentPlayer === userPlayer) {
+        if (timerElement && currentPlayer !== 'N/A') {
+            timerElement.textContent = formatTime(timerSeconds);
             updateTimer();
         }
 

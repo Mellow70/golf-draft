@@ -177,12 +177,13 @@ def logout():
 @app.route('/pick', methods=['POST'])
 def pick():
     if 'username' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
+        return redirect(url_for('login'))
 
     username = session['username']
     golfer = request.form.get('golfer')
     if not golfer:
-        return jsonify({'error': 'No golfer selected'}), 400
+        flash('No golfer selected', 'error')
+        return redirect(url_for('index'))
 
     picks = load_draft_picks()
     draft_order = get_draft_order()
@@ -190,30 +191,29 @@ def pick():
 
     user_player = USER_PLAYER_MAPPING.get(username)
     if user_player != current_player:
-        return jsonify({'error': 'Not your turn'}), 403
+        flash('Not your turn', 'error')
+        return redirect(url_for('index'))
 
     golfers = load_golfers()
     available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
     if golfer not in available_golfers:
-        return jsonify({'error': 'Golfer not available'}), 400
+        flash('Golfer not available', 'error')
+        return redirect(url_for('index'))
 
     player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
     if not player_row:
-        return jsonify({'error': 'Player not found in draft board'}), 400
+        flash('Player not found in draft board', 'error')
+        return redirect(url_for('index'))
 
     column = f'Pick {current_pick_number}'
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
 
-    return jsonify({
-        'success': True,
-        'player': user_player,
-        'golfer': golfer
-    })
+    return redirect(url_for('index'))
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
     if 'username' not in session:
-        return jsonify({'error': 'Not logged in'}), 401
+        return redirect(url_for('login'))
 
     username = session['username']
     picks = load_draft_picks()
@@ -223,28 +223,27 @@ def autopick():
     user_player = USER_PLAYER_MAPPING.get(username)
     print(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
     if user_player != current_player:
-        return jsonify({'error': 'Not your turn'}), 403
+        flash('Not your turn', 'error')
+        return redirect(url_for('index'))
 
     golfers = load_golfers()
     available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
     print(f"Available golfers for autopick: {available_golfers}")
     if not available_golfers:
-        return jsonify({'error': 'No golfers available'}), 400
+        flash('No golfers available', 'error')
+        return redirect(url_for('index'))
 
     golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
 
     player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
     if not player_row:
-        return jsonify({'error': 'Player not found in draft board'}), 400
+        flash('Player not found in draft board', 'error')
+        return redirect(url_for('index'))
 
     column = f'Pick {current_pick_number}'
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
 
-    return jsonify({
-        'success': True,
-        'player': user_player,
-        'golfer': golfer
-    })
+    return redirect(url_for('index'))
 
 @app.route('/draft_state', methods=['GET'])
 def draft_state():
