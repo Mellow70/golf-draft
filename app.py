@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, flash
 from flask_session import Session
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -43,6 +43,20 @@ USER_CREDENTIALS = {
 }
 TURN_DURATION = 180  # 3 minutes in seconds
 
+def ensure_pick_time_column():
+    """Ensure the 'Pick Time' column exists in the Draft Board worksheet."""
+    try:
+        headers = draft_worksheet.row_values(1)
+        if 'Pick Time' not in headers:
+            # Add 'Pick Time' as the last column
+            draft_worksheet.update_cell(1, len(headers) + 1, 'Pick Time')
+            print("Added 'Pick Time' column to Draft Board worksheet")
+        else:
+            print("'Pick Time' column already exists")
+    except Exception as e:
+        print(f"Error ensuring 'Pick Time' column: {str(e)}")
+        raise
+
 def get_draft_order():
     """Get the draft order from the Draft Board worksheet."""
     try:
@@ -77,6 +91,7 @@ def load_draft_picks():
         picks = []
         for record in records:
             player = record.get('Player')
+            pick_time = record.get('Pick Time', '')
             for pick_num in range(1, 4):
                 pick_key = f'Pick {pick_num}'
                 golfer = record.get(pick_key)
@@ -84,7 +99,8 @@ def load_draft_picks():
                     picks.append({
                         'Player': player,
                         'Golfer': golfer,
-                        'Pick Number': pick_num
+                        'Pick Number': pick_num,
+                        'Pick Time': pick_time
                     })
         print(f"Loaded draft picks: {picks}")
         return picks
@@ -111,9 +127,31 @@ def get_current_turn(picks, draft_order):
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
-                remaining_time = TURN_DURATION  # Default to full duration since we don't store pick times
+                # Calculate remaining time based on the last pick's timestamp
+                player_picks_list = player_picks[player_name]
+                if player_picks_list:
+                    last_pick = player_picks_list[-1]
+                    pick_time_str = last_pick.get('Pick Time', '')
+                    try:
+                        pick_time = datetime.strptime(pick_time_str, '%Y-%m-%d %H:%M:%S')
+                        elapsed = (datetime.now() - pick_time).total_seconds()
+                        remaining_time = max(0, TURN_DURATION - elapsed)
+                    except ValueError:
+                        remaining_time = TURN_DURATION
+                else:
+                    # If no picks for this player, look for the last pick in the entire draft
+                    last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
+                    if last_pick and last_pick.get('Pick Time'):
+                        try:
+                            pick_time = datetime.strptime(last_pick['Pick Time'], '%Y-%m-%d %H:%M:%S')
+                            elapsed = (datetime.now() - pick_time).total_seconds()
+                            remaining_time = max(0, TURN_DURATION - elapsed)
+                        except ValueError:
+                            remaining_time = TURN_DURATION
+                    else:
+                        remaining_time = TURN_DURATION
                 print(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
-                return player_name, pick_number, remaining_time
+                return player_name, pick_number, int(remaining_time)
 
     print("No current turn, draft might be complete")
     return None, None, TURN_DURATION
@@ -123,6 +161,9 @@ def get_current_turn(picks, draft_order):
 def index():
     if 'username' not in session:
         return redirect(url_for('login'))
+
+    # Ensure the 'Pick Time' column exists
+    ensure_pick_time_column()
 
     username = session['username']
     golfers = load_golfers()
@@ -206,6 +247,14 @@ def pick():
         return redirect(url_for('index'))
 
     column = f'Pick {current_pick_number}'
+    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    pick_time_col = draft_worksheet.find('Pick Time')
+    if pick_time_col:
+        draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+    else:
+        flash('Pick Time column not found', 'error')
+        return redirect(url_for('index'))
+
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
 
     return redirect(url_for('index'))
@@ -241,6 +290,14 @@ def autopick():
         return redirect(url_for('index'))
 
     column = f'Pick {current_pick_number}'
+    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    pick_time_col = draft_worksheet.find('Pick Time')
+    if pick_time_col:
+        draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+    else:
+        flash('Pick Time column not found', 'error')
+        return redirect(url_for('index'))
+
     draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
 
     return redirect(url_for('index'))

@@ -69,7 +69,7 @@
         <div class="player-info">
             <span class="font-semibold">Logged in as: {{ username }} ({{ user_player_mapping[username] }})</span><br>
             {% if current_player != 'N/A' %}
-                <span>{{ current_player }}'s turn: </span>
+                <span id="turnLabel">{{ current_player }}'s turn: </span>
                 <span class="timer" id="timer"></span>
             {% else %}
                 <span>No active turn.</span>
@@ -101,11 +101,11 @@
     </div>
 
     <script>
-        let timerSeconds = {{ timer_seconds }};
         const timerElement = document.getElementById('timer');
+        const turnLabel = document.getElementById('turnLabel');
         const pickButton = document.getElementById('pickButton');
         const autopickButton = document.getElementById('autopickButton');
-        const currentPlayer = "{{ current_player }}";
+        let currentPlayer = "{{ current_player }}";
         const userPlayer = "{{ user_player_mapping[username] }}";
 
         function formatTime(seconds) {
@@ -115,19 +115,47 @@
         }
 
         function updateTimer() {
-            if (timerElement && currentPlayer !== 'N/A' && timerSeconds > 0) {
-                timerElement.textContent = formatTime(timerSeconds);
-                timerSeconds--;
-                if (timerSeconds <= 0 && currentPlayer === userPlayer) {
-                    console.log("Timer reached 0, triggering autopick...");
-                    autopick();
-                }
-            }
-            setTimeout(updateTimer, 1000);
+            fetch('/draft_state')
+                .then(response => response.json())
+                .then(data => {
+                    currentPlayer = data.current_player;
+                    const remainingTime = data.remaining_time;
+                    const draftComplete = data.draft_complete;
+
+                    if (draftComplete) {
+                        window.location.reload();
+                        return;
+                    }
+
+                    if (timerElement && currentPlayer !== 'N/A') {
+                        timerElement.textContent = formatTime(remainingTime);
+                        turnLabel.textContent = `${currentPlayer}'s turn: `;
+                        // Enable/disable buttons based on the current player
+                        if (currentPlayer === userPlayer) {
+                            pickButton.disabled = false;
+                            autopickButton.disabled = false;
+                            if (remainingTime <= 0) {
+                                console.log("Timer reached 0, triggering autopick...");
+                                autopick();
+                            }
+                        } else {
+                            pickButton.disabled = true;
+                            autopickButton.disabled = true;
+                        }
+                    } else {
+                        timerElement.textContent = '';
+                        turnLabel.textContent = 'No active turn.';
+                        pickButton.disabled = true;
+                        autopickButton.disabled = true;
+                    }
+                })
+                .catch(error => console.error("Error fetching draft state:", error))
+                .finally(() => {
+                    setTimeout(updateTimer, 1000);
+                });
         }
 
         function autopick() {
-            // Submit the autopick form to trigger a full page reload
             const form = document.createElement('form');
             form.method = 'POST';
             form.action = '/autopick';
@@ -136,7 +164,6 @@
         }
 
         if (timerElement && currentPlayer !== 'N/A') {
-            timerElement.textContent = formatTime(timerSeconds);
             updateTimer();
         }
 
