@@ -108,8 +108,40 @@ def load_draft_picks():
         print(f"Error loading draft picks: {str(e)}")
         return []
 
+def perform_autopick(current_player, current_pick_number, draft_order, picks):
+    """Perform an autopick for the current player."""
+    try:
+        golfers = load_golfers()
+        available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
+        print(f"Available golfers for autopick: {available_golfers}")
+        if not available_golfers:
+            print("No golfers available for autopick")
+            return False
+
+        golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == current_player), None)
+        if not player_row:
+            print("Player not found in draft board for autopick")
+            return False
+
+        column = f'Pick {current_pick_number}'
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pick_time_col = draft_worksheet.find('Pick Time')
+        if pick_time_col:
+            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+        else:
+            print("Pick Time column not found during autopick")
+            return False
+
+        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        print(f"Autopick successful: {current_player} picked {golfer}")
+        return True
+    except Exception as e:
+        print(f"Error during autopick: {str(e)}")
+        return False
+
 def get_current_turn(picks, draft_order):
-    """Determine whose turn it is and the remaining time."""
+    """Determine whose turn it is and the remaining time, performing autopick if necessary."""
     if not draft_order:
         print("Draft order is empty")
         return None, None, TURN_DURATION
@@ -128,28 +160,33 @@ def get_current_turn(picks, draft_order):
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
                 # Calculate remaining time based on the last pick's timestamp
-                player_picks_list = player_picks[player_name]
-                if player_picks_list:
-                    last_pick = player_picks_list[-1]
-                    pick_time_str = last_pick.get('Pick Time', '')
+                last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
+                if last_pick and last_pick.get('Pick Time'):
                     try:
-                        pick_time = datetime.strptime(pick_time_str, '%Y-%m-%d %H:%M:%S')
+                        pick_time = datetime.strptime(last_pick['Pick Time'], '%Y-%m-%d %H:%M:%S')
                         elapsed = (datetime.now() - pick_time).total_seconds()
                         remaining_time = max(0, TURN_DURATION - elapsed)
-                    except ValueError:
+                    except ValueError as e:
+                        print(f"Error parsing Pick Time '{last_pick['Pick Time']}': {str(e)}")
                         remaining_time = TURN_DURATION
                 else:
-                    # If no picks for this player, look for the last pick in the entire draft
-                    last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
-                    if last_pick and last_pick.get('Pick Time'):
-                        try:
-                            pick_time = datetime.strptime(last_pick['Pick Time'], '%Y-%m-%d %H:%M:%S')
-                            elapsed = (datetime.now() - pick_time).total_seconds()
-                            remaining_time = max(0, TURN_DURATION - elapsed)
-                        except ValueError:
-                            remaining_time = TURN_DURATION
-                    else:
-                        remaining_time = TURN_DURATION
+                    remaining_time = TURN_DURATION
+
+                # If the timer has expired, perform autopick
+                if remaining_time <= 0:
+                    print(f"Timer expired for {player_name}'s turn, performing autopick")
+                    success = perform_autopick(player_name, pick_number, draft_order, picks)
+                    if success:
+                        # Reload picks after autopick
+                        picks = load_draft_picks()
+                        player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
+                        for pick in picks:
+                            player = pick['Player']
+                            if player in player_picks:
+                                player_picks[player].append(pick)
+                        # Recursively call to get the next turn
+                        return get_current_turn(picks, draft_order)
+
                 print(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
                 return player_name, pick_number, int(remaining_time)
 
@@ -324,7 +361,7 @@ def draft_state():
         return jsonify({
             'current_player': current_player,
             'current_pick_number': current_pick_number,
-            'remaining_time': remaining_time,
+            'remaining_time': remaining_time if remaining_time is not None else TURN_DURATION,
             'picks': picks,
             'available_golfers': available_golfers,
             'player_picks': player_picks,
@@ -332,7 +369,16 @@ def draft_state():
         })
     except Exception as e:
         app.logger.error(f"Error in draft_state: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'current_player': 'N/A',
+            'current_pick_number': None,
+            'remaining_time': TURN_DURATION,
+            'picks': [],
+            'available_golfers': [],
+            'player_picks': {},
+            'draft_complete': False,
+            'error': str(e)
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8000))
