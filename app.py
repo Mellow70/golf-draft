@@ -57,18 +57,49 @@ last_golfers_update = None
 last_draft_order_update = None
 CACHE_DURATION = timedelta(seconds=10)  # Cache for 10 seconds
 
-def ensure_pick_time_column():
-    """Ensure the 'Pick Time' column exists in the Draft Board worksheet."""
+def ensure_draft_columns():
+    """Ensure the 'Pick Time' and 'Draft Start Time' columns exist in the Draft Board worksheet."""
     try:
         headers = draft_worksheet.row_values(1)
         if 'Pick Time' not in headers:
             draft_worksheet.update_cell(1, len(headers) + 1, 'Pick Time')
             logger.info("Added 'Pick Time' column to Draft Board worksheet")
-        else:
-            logger.info("'Pick Time' column already exists")
+        if 'Draft Start Time' not in headers:
+            draft_worksheet.update_cell(1, len(headers) + 1, 'Draft Start Time')
+            logger.info("Added 'Draft Start Time' column to Draft Board worksheet")
     except Exception as e:
-        logger.error(f"Error ensuring 'Pick Time' column: {str(e)}")
+        logger.error(f"Error ensuring draft columns: {str(e)}")
         raise
+
+def get_draft_start_time():
+    """Get or set the draft start time from the Draft Board worksheet."""
+    try:
+        headers = draft_worksheet.row_values(1)
+        draft_start_col = headers.index('Draft Start Time') + 1 if 'Draft Start Time' in headers else None
+        if not draft_start_col:
+            logger.error("Draft Start Time column not found")
+            return None
+
+        # Look for the first non-empty Draft Start Time
+        values = draft_worksheet.col_values(draft_start_col)[1:]  # Skip header
+        for value in values:
+            if value:
+                return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+
+        # If no start time exists, set it now
+        start_time = datetime.now()
+        # Find the first row with a player (Alex should be at row 2)
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row.get('Player') == 'Alex'), None)
+        if player_row:
+            draft_worksheet.update_cell(player_row, draft_start_col, start_time.strftime('%Y-%m-%d %H:%M:%S'))
+            logger.info(f"Set Draft Start Time to {start_time}")
+            return start_time
+        else:
+            logger.error("Alex not found in draft board to set Draft Start Time")
+            return None
+    except Exception as e:
+        logger.error(f"Error getting/setting Draft Start Time: {str(e)}")
+        return None
 
 def get_draft_order():
     """Get the draft order from the Draft Board worksheet with caching."""
@@ -222,17 +253,25 @@ def get_current_turn(picks, draft_order):
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
-                last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
-                if last_pick and last_pick.get('Pick Time'):
-                    try:
-                        pick_time = datetime.strptime(last_pick['Pick Time'], '%Y-%m-%d %H:%M:%S')
-                        elapsed = (datetime.now() - pick_time).total_seconds()
-                        remaining_time = max(0, TURN_DURATION - elapsed)
-                    except ValueError as e:
-                        logger.error(f"Error parsing Pick Time '{last_pick['Pick Time']}': {str(e)}")
-                        remaining_time = TURN_DURATION
+                if not picks:  # First turn of the draft
+                    draft_start = get_draft_start_time()
+                    if not draft_start:
+                        logger.error("Could not determine draft start time")
+                        return player_name, pick_number, TURN_DURATION
+                    elapsed = (datetime.now() - draft_start).total_seconds()
+                    remaining_time = max(0, TURN_DURATION - elapsed)
                 else:
-                    remaining_time = TURN_DURATION
+                    last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
+                    if last_pick and last_pick.get('Pick Time'):
+                        try:
+                            pick_time = datetime.strptime(last_pick['Pick Time'], '%Y-%m-%d %H:%M:%S')
+                            elapsed = (datetime.now() - pick_time).total_seconds()
+                            remaining_time = max(0, TURN_DURATION - elapsed)
+                        except ValueError as e:
+                            logger.error(f"Error parsing Pick Time '{last_pick['Pick Time']}': {str(e)}")
+                            remaining_time = TURN_DURATION
+                    else:
+                        remaining_time = TURN_DURATION
 
                 if remaining_time <= 0:
                     logger.info(f"Timer expired for {player_name}'s turn, performing autopick")
@@ -260,7 +299,7 @@ def index():
             logger.info("No username in session, redirecting to login")
             return redirect(url_for('login'))
 
-        ensure_pick_time_column()
+        ensure_draft_columns()
 
         username = session['username']
         logger.info(f"Loading index for username: {username}")

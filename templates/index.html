@@ -115,6 +115,7 @@
         const FETCH_INTERVAL = 3000;
         let lastKnownPlayer = currentPlayer;
         let lastKnownSeconds = displayedSeconds;
+        let isDropdownInteracting = false;
 
         function formatTime(seconds) {
             if (isNaN(seconds) || seconds < 0) {
@@ -140,6 +141,14 @@
         }
 
         function updateGolferDropdown(availableGolfers) {
+            if (isDropdownInteracting) {
+                console.log("Skipping dropdown update due to user interaction");
+                return;
+            }
+
+            const currentSelection = golferSelect.value;
+            console.log(`Current dropdown selection before update: ${currentSelection}`);
+
             while (golferSelect.options.length > 1) {
                 golferSelect.remove(1);
             }
@@ -149,6 +158,14 @@
                 option.textContent = golfer;
                 golferSelect.appendChild(option);
             });
+
+            // Restore the selection if it still exists in the updated list
+            if (currentSelection && availableGolfers.includes(currentSelection)) {
+                golferSelect.value = currentSelection;
+            } else {
+                golferSelect.value = "";
+            }
+            console.log(`Dropdown selection after update: ${golferSelect.value}`);
         }
 
         function updateTimer() {
@@ -158,6 +175,7 @@
 
             if (now - lastFetch < FETCH_INTERVAL) {
                 displayedSeconds = Math.max(0, displayedSeconds - elapsed);
+                console.log(`Client-side timer update: ${displayedSeconds} seconds remaining`);
                 if (timerElement && lastKnownPlayer !== 'N/A' && lastKnownPlayer !== 'Unknown') {
                     timerElement.textContent = formatTime(Math.round(displayedSeconds));
                     turnLabel.textContent = `${lastKnownPlayer}'s turn: `;
@@ -174,6 +192,8 @@
                     const serverSeconds = data.remaining_time !== undefined && !isNaN(data.remaining_time) ? data.remaining_time : 0;
                     const draftComplete = data.draft_complete;
 
+                    console.log(`Server response - Current Player: ${currentPlayer}, Server Seconds: ${serverSeconds}`);
+
                     if (draftComplete) {
                         window.location.reload();
                         return;
@@ -181,8 +201,10 @@
 
                     if (Math.abs(serverSeconds - displayedSeconds) > 2) {
                         displayedSeconds = serverSeconds;
+                        console.log(`Adjusted displayedSeconds to server time: ${displayedSeconds}`);
                     } else {
                         displayedSeconds = Math.max(0, displayedSeconds - elapsed);
+                        console.log(`Updated displayedSeconds with elapsed time: ${displayedSeconds}`);
                     }
 
                     if (currentPlayer !== 'N/A' && currentPlayer !== 'Unknown') {
@@ -196,11 +218,11 @@
                         if (lastKnownPlayer === userPlayer) {
                             pickButton.disabled = false;
                             autopickButton.disabled = false;
-                            golferSelect.disabled = false; // Enable dropdown
+                            golferSelect.disabled = false;
                         } else {
                             pickButton.disabled = true;
                             autopickButton.disabled = true;
-                            golferSelect.disabled = true; // Disable dropdown
+                            golferSelect.disabled = true;
                         }
                     } else {
                         timerElement.textContent = '';
@@ -235,13 +257,14 @@
         }
 
         function submitPickForm(attempt = 1, maxAttempts = 3) {
-            const form = document.getElementById('pickForm');
             const golfer = golferSelect.value;
+            console.log(`Attempting to submit pick - Golfer: ${golfer}, Attempt: ${attempt}`);
             if (!golfer) {
                 alert('Please select a golfer');
                 return;
             }
 
+            const form = document.getElementById('pickForm');
             fetch(form.action, {
                 method: 'POST',
                 body: new FormData(form),
@@ -251,7 +274,8 @@
             })
             .then(response => {
                 if (response.ok) {
-                    window.location.href = '/index'; // Redirect on success
+                    console.log("Pick submitted successfully");
+                    window.location.href = '/index';
                 } else {
                     throw new Error('Pick submission failed');
                 }
@@ -266,6 +290,25 @@
                 }
             });
         }
+
+        // Handle dropdown interaction to prevent updates during selection
+        golferSelect.addEventListener('mousedown', () => {
+            isDropdownInteracting = true;
+            console.log("Dropdown interaction started");
+        });
+
+        golferSelect.addEventListener('change', () => {
+            console.log(`Golfer selected: ${golferSelect.value}`);
+            setTimeout(() => {
+                isDropdownInteracting = false;
+                console.log("Dropdown interaction ended");
+            }, 500);
+        });
+
+        golferSelect.addEventListener('blur', () => {
+            isDropdownInteracting = false;
+            console.log("Dropdown lost focus, interaction ended");
+        });
 
         // Ensure UI elements are interactive after a slight delay
         setTimeout(() => {
