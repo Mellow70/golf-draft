@@ -157,6 +157,16 @@ def load_draft_picks():
             return cached_picks
         raise
 
+@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
+def update_draft_cell(player_row, column, value):
+    """Update a cell in the Draft Board worksheet with retries."""
+    try:
+        draft_worksheet.update_cell(player_row, column, value)
+        logger.info(f"Updated cell at row {player_row}, column {column} with value {value}")
+    except Exception as e:
+        logger.error(f"Error updating cell at row {player_row}, column {column}: {str(e)}")
+        raise
+
 def perform_autopick(current_player, current_pick_number, draft_order, picks):
     """Perform an autopick for the current player."""
     try:
@@ -177,12 +187,12 @@ def perform_autopick(current_player, current_pick_number, draft_order, picks):
         pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         pick_time_col = draft_worksheet.find('Pick Time')
         if pick_time_col:
-            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+            update_draft_cell(player_row, pick_time_col.col, pick_time)
         else:
             logger.error("Pick Time column not found during autopick")
             return False
 
-        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        update_draft_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Autopick successful: {current_player} picked {golfer}")
         # Invalidate cache after autopick
         global cached_picks, last_picks_update
@@ -274,7 +284,7 @@ def index():
         return render_template(
             'index.html',
             username=username,
-            golfers=available_golfers,  # Pass only available golfers
+            golfers=available_golfers,
             picks=picks,
             participants=draft_order,
             player_picks=player_picks,
@@ -325,7 +335,9 @@ def pick():
 
         username = session['username']
         golfer = request.form.get('golfer')
+        logger.info(f"Pick attempt - Username: {username}, Golfer: {golfer}")
         if not golfer:
+            logger.warning("No golfer selected in pick attempt")
             flash('No golfer selected', 'error')
             return redirect(url_for('index'))
 
@@ -335,17 +347,20 @@ def pick():
 
         user_player = USER_PLAYER_MAPPING.get(username)
         if user_player != current_player:
+            logger.warning(f"Not {user_player}'s turn, current player is {current_player}")
             flash('Not your turn', 'error')
             return redirect(url_for('index'))
 
         golfers = load_golfers()
         available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
         if golfer not in available_golfers:
+            logger.warning(f"Golfer {golfer} not available for {user_player}")
             flash('Golfer not available', 'error')
             return redirect(url_for('index'))
 
         player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
         if not player_row:
+            logger.error(f"Player {user_player} not found in draft board")
             flash('Player not found in draft board', 'error')
             return redirect(url_for('index'))
 
@@ -353,12 +368,13 @@ def pick():
         pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         pick_time_col = draft_worksheet.find('Pick Time')
         if pick_time_col:
-            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+            update_draft_cell(player_row, pick_time_col.col, pick_time)
         else:
+            logger.error("Pick Time column not found during pick")
             flash('Pick Time column not found', 'error')
             return redirect(url_for('index'))
 
-        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        update_draft_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Pick successful: {user_player} picked {golfer}")
         # Invalidate cache after pick
         global cached_picks, last_picks_update
@@ -368,7 +384,8 @@ def pick():
         return redirect(url_for('index'))
     except Exception as e:
         logger.error(f"Internal Server Error in /pick: {str(e)}")
-        return "Internal Server Error", 500
+        flash('Failed to register pick, please try again', 'error')
+        return redirect(url_for('index'))
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
@@ -406,12 +423,12 @@ def autopick():
         pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         pick_time_col = draft_worksheet.find('Pick Time')
         if pick_time_col:
-            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+            update_draft_cell(player_row, pick_time_col.col, pick_time)
         else:
             flash('Pick Time column not found', 'error')
             return redirect(url_for('index'))
 
-        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        update_draft_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Autopick successful: {user_player} picked {golfer}")
         # Invalidate cache after autopick
         global cached_picks, last_picks_update
@@ -452,7 +469,6 @@ def draft_state():
         })
     except Exception as e:
         logger.error(f"Internal Server Error in /draft_state: {str(e)}")
-        # Return a fallback state to keep the timer active
         return jsonify({
             'current_player': 'Unknown',
             'current_pick_number': None,
@@ -462,7 +478,7 @@ def draft_state():
             'player_picks': {},
             'draft_complete': False,
             'error': str(e)
-        }), 200  # Return 200 to avoid breaking the client
+        }), 200
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8000))

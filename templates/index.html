@@ -79,14 +79,14 @@
             <p class="draft-complete">Draft is complete!</p>
         {% else %}
             <form id="pickForm" method="POST" action="/pick">
-                <select name="golfer" id="golferSelect" {% if current_player != user_player_mapping[username] %}disabled{% endif %}>
+                <select name="golfer" id="golferSelect">
                     <option value="">Select a Golfer</option>
                     {% for golfer in golfers %}
                         <option value="{{ golfer }}">{{ golfer }}</option>
                     {% endfor %}
                 </select>
-                <button type="submit" class="pick-button" id="pickButton" {% if current_player != user_player_mapping[username] %}disabled{% endif %}>Pick Golfer</button>
-                <button type="button" class="autopick-button" id="autopickButton" {% if current_player != user_player_mapping[username] %}disabled{% endif %}>Auto Pick</button>
+                <button type="submit" class="pick-button" id="pickButton">Pick Golfer</button>
+                <button type="button" class="autopick-button" id="autopickButton">Auto Pick</button>
             </form>
             <div id="picks">
                 {% for player, picks in player_picks.items() %}
@@ -112,7 +112,7 @@
         let lastUpdateTime = Date.now();
         let displayedSeconds = {{ timer_seconds }};
         let lastFetch = 0;
-        const FETCH_INTERVAL = 3000; // Fetch every 3 seconds to reduce load
+        const FETCH_INTERVAL = 3000;
         let lastKnownPlayer = currentPlayer;
         let lastKnownSeconds = displayedSeconds;
 
@@ -156,7 +156,6 @@
             const elapsed = (now - lastUpdateTime) / 1000;
             lastUpdateTime = now;
 
-            // Throttle fetch requests
             if (now - lastFetch < FETCH_INTERVAL) {
                 displayedSeconds = Math.max(0, displayedSeconds - elapsed);
                 if (timerElement && lastKnownPlayer !== 'N/A' && lastKnownPlayer !== 'Unknown') {
@@ -186,7 +185,6 @@
                         displayedSeconds = Math.max(0, displayedSeconds - elapsed);
                     }
 
-                    // Update last known state to persist timer during errors
                     if (currentPlayer !== 'N/A' && currentPlayer !== 'Unknown') {
                         lastKnownPlayer = currentPlayer;
                         lastKnownSeconds = displayedSeconds;
@@ -198,18 +196,20 @@
                         if (lastKnownPlayer === userPlayer) {
                             pickButton.disabled = false;
                             autopickButton.disabled = false;
+                            golferSelect.disabled = false; // Enable dropdown
                         } else {
                             pickButton.disabled = true;
                             autopickButton.disabled = true;
+                            golferSelect.disabled = true; // Disable dropdown
                         }
                     } else {
                         timerElement.textContent = '';
                         turnLabel.textContent = 'No active turn.';
                         pickButton.disabled = true;
                         autopickButton.disabled = true;
+                        golferSelect.disabled = true;
                     }
 
-                    // Update picks and dropdown
                     updatePicks(data.player_picks);
                     updateGolferDropdown(data.available_golfers);
                 })
@@ -234,13 +234,57 @@
             form.submit();
         }
 
+        function submitPickForm(attempt = 1, maxAttempts = 3) {
+            const form = document.getElementById('pickForm');
+            const golfer = golferSelect.value;
+            if (!golfer) {
+                alert('Please select a golfer');
+                return;
+            }
+
+            fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                headers: {
+                    'Accept': 'text/html'
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    window.location.href = '/index'; // Redirect on success
+                } else {
+                    throw new Error('Pick submission failed');
+                }
+            })
+            .catch(error => {
+                console.error(`Pick submission attempt ${attempt} failed:`, error);
+                if (attempt < maxAttempts) {
+                    console.log(`Retrying pick submission, attempt ${attempt + 1}`);
+                    setTimeout(() => submitPickForm(attempt + 1, maxAttempts), 1000);
+                } else {
+                    alert('Failed to register pick after multiple attempts. Please try again.');
+                }
+            });
+        }
+
+        // Ensure UI elements are interactive after a slight delay
+        setTimeout(() => {
+            if (lastKnownPlayer === userPlayer) {
+                golferSelect.disabled = false;
+                pickButton.disabled = false;
+                autopickButton.disabled = false;
+            }
+        }, 500);
+
         if (timerElement && currentPlayer !== 'N/A') {
             timerElement.textContent = formatTime(displayedSeconds);
             updateTimer();
         }
 
         document.getElementById('pickForm').addEventListener('submit', function(event) {
+            event.preventDefault();
             console.log("Submitting pick form...");
+            submitPickForm();
         });
 
         document.getElementById('autopickButton').addEventListener('click', function() {
