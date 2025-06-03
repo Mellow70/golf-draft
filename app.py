@@ -5,7 +5,7 @@ from googleapiclient.discovery import build
 import gspread
 import backoff
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import json
 from dotenv import load_dotenv
@@ -48,6 +48,15 @@ USER_CREDENTIALS = {
 }
 TURN_DURATION = 180  # 3 minutes in seconds
 
+# Caching variables
+cached_picks = None
+cached_golfers = None
+cached_draft_order = None
+last_picks_update = None
+last_golfers_update = None
+last_draft_order_update = None
+CACHE_DURATION = timedelta(seconds=10)  # Cache for 10 seconds
+
 def ensure_pick_time_column():
     """Ensure the 'Pick Time' column exists in the Draft Board worksheet."""
     try:
@@ -62,39 +71,65 @@ def ensure_pick_time_column():
         raise
 
 def get_draft_order():
-    """Get the draft order from the Draft Board worksheet."""
+    """Get the draft order from the Draft Board worksheet with caching."""
+    global cached_draft_order, last_draft_order_update
+    now = datetime.now()
+    if cached_draft_order and last_draft_order_update and (now - last_draft_order_update) < CACHE_DURATION:
+        logger.info("Returning cached draft order")
+        return cached_draft_order
+
     try:
         records = draft_worksheet.get_all_records()
         if not records:
             logger.info("No records found in Draft Board, using default PLAYERS")
-            return PLAYERS
-        order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
-        if not order:
-            logger.info("No valid draft order entries, using default PLAYERS")
-            return PLAYERS
-        sorted_order = sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip())))
-        logger.info(f"Draft order: {sorted_order}")
-        return sorted_order if order else PLAYERS
+            cached_draft_order = PLAYERS
+        else:
+            order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
+            if not order:
+                logger.info("No valid draft order entries, using default PLAYERS")
+                cached_draft_order = PLAYERS
+            else:
+                sorted_order = sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip())))
+                logger.info(f"Draft order: {sorted_order}")
+                cached_draft_order = sorted_order if order else PLAYERS
+        last_draft_order_update = now
+        return cached_draft_order
     except (ValueError, KeyError, TypeError) as e:
         logger.error(f"Error parsing draft order: {str(e)}, falling back to default order")
         return PLAYERS
 
-@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=5)
+@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
 def load_golfers():
-    """Load golfers from the Google Sheet."""
+    """Load golfers from the Google Sheet with caching."""
+    global cached_golfers, last_golfers_update
+    now = datetime.now()
+    if cached_golfers and last_golfers_update and (now - last_golfers_update) < CACHE_DURATION:
+        logger.info("Returning cached golfers")
+        return cached_golfers
+
     try:
         golfers = worksheet.get_all_records()
         logger.info(f"Loaded golfers: {golfers}")
-        return sorted(golfers, key=lambda x: int(x['Ranking']))
+        cached_golfers = sorted(golfers, key=lambda x: int(x['Ranking']))
+        last_golfers_update = now
+        return cached_golfers
     except Exception as e:
         logger.error(f"Error loading golfers: {str(e)}")
+        if cached_golfers:
+            logger.info("Returning cached golfers due to error")
+            return cached_golfers
         raise
 
-@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=5)
+@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
 def load_draft_picks():
-    """Load draft picks from the Google Sheet."""
+    """Load draft picks from the Google Sheet with caching."""
+    global cached_picks, last_picks_update
+    now = datetime.now()
+    if cached_picks and last_picks_update and (now - last_picks_update) < CACHE_DURATION:
+        logger.info("Returning cached draft picks")
+        return cached_picks
+
     try:
-        # Force a refresh by re-fetching the worksheet data
         draft_worksheet = sheet.worksheet('Draft Board')
         records = draft_worksheet.get_all_records()
         picks = []
@@ -104,7 +139,7 @@ def load_draft_picks():
             for pick_num in range(1, 4):
                 pick_key = f'Pick {pick_num}'
                 golfer = record.get(pick_key)
-                if golfer:  # Only include non-empty picks
+                if golfer:
                     picks.append({
                         'Player': player,
                         'Golfer': golfer,
@@ -112,9 +147,14 @@ def load_draft_picks():
                         'Pick Time': pick_time
                     })
         logger.info(f"Loaded draft picks: {picks}")
+        cached_picks = picks
+        last_picks_update = now
         return picks
     except Exception as e:
         logger.error(f"Error loading draft picks: {str(e)}")
+        if cached_picks:
+            logger.info("Returning cached draft picks due to error")
+            return cached_picks
         raise
 
 def perform_autopick(current_player, current_pick_number, draft_order, picks):
@@ -144,6 +184,10 @@ def perform_autopick(current_player, current_pick_number, draft_order, picks):
 
         draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Autopick successful: {current_player} picked {golfer}")
+        # Invalidate cache after autopick
+        global cached_picks, last_picks_update
+        cached_picks = None
+        last_picks_update = None
         return True
     except Exception as e:
         logger.error(f"Error during autopick: {str(e)}")
@@ -163,7 +207,7 @@ def get_current_turn(picks, draft_order):
 
     logger.info(f"Player picks: {player_picks}")
 
-    for round_num in range(1, 4):  # 3 picks per player
+    for round_num in range(1, 4):
         for player in draft_order:
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
@@ -224,12 +268,13 @@ def index():
         current_player = str(current_player) if current_player else 'N/A'
         logger.info(f"Index - Current player: {current_player}, Pick number: {current_pick_number}, Remaining time: {remaining_time}")
 
+        available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
         draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
 
         return render_template(
             'index.html',
             username=username,
-            golfers=[g['Golfer Name'] for g in golfers],
+            golfers=available_golfers,  # Pass only available golfers
             picks=picks,
             participants=draft_order,
             player_picks=player_picks,
@@ -315,6 +360,10 @@ def pick():
 
         draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Pick successful: {user_player} picked {golfer}")
+        # Invalidate cache after pick
+        global cached_picks, last_picks_update
+        cached_picks = None
+        last_picks_update = None
 
         return redirect(url_for('index'))
     except Exception as e:
@@ -364,6 +413,10 @@ def autopick():
 
         draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
         logger.info(f"Autopick successful: {user_player} picked {golfer}")
+        # Invalidate cache after autopick
+        global cached_picks, last_picks_update
+        cached_picks = None
+        last_picks_update = None
 
         return redirect(url_for('index'))
     except Exception as e:
@@ -399,16 +452,17 @@ def draft_state():
         })
     except Exception as e:
         logger.error(f"Internal Server Error in /draft_state: {str(e)}")
+        # Return a fallback state to keep the timer active
         return jsonify({
-            'current_player': 'N/A',
+            'current_player': 'Unknown',
             'current_pick_number': None,
             'remaining_time': TURN_DURATION,
-            'picks': [],
+            'picks': cached_picks if cached_picks else [],
             'available_golfers': [],
             'player_picks': {},
             'draft_complete': False,
             'error': str(e)
-        }), 500
+        }), 200  # Return 200 to avoid breaking the client
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8000))

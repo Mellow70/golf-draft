@@ -90,7 +90,7 @@
             </form>
             <div id="picks">
                 {% for player, picks in player_picks.items() %}
-                    <p>{{ player }}'s Picks: 
+                    <p class="player-picks" data-player="{{ player }}">{{ player }}'s Picks: 
                         {% for pick in picks %}
                             {{ pick['Golfer'] }} (Pick {{ pick['Pick Number'] }})
                         {% endfor %}
@@ -105,10 +105,16 @@
         const turnLabel = document.getElementById('turnLabel');
         const pickButton = document.getElementById('pickButton');
         const autopickButton = document.getElementById('autopickButton');
+        const golferSelect = document.getElementById('golferSelect');
+        const picksContainer = document.getElementById('picks');
         let currentPlayer = "{{ current_player }}";
         const userPlayer = "{{ user_player_mapping[username] }}";
         let lastUpdateTime = Date.now();
         let displayedSeconds = {{ timer_seconds }};
+        let lastFetch = 0;
+        const FETCH_INTERVAL = 3000; // Fetch every 3 seconds to reduce load
+        let lastKnownPlayer = currentPlayer;
+        let lastKnownSeconds = displayedSeconds;
 
         function formatTime(seconds) {
             if (isNaN(seconds) || seconds < 0) {
@@ -119,14 +125,52 @@
             return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
         }
 
+        function updatePicks(playerPicks) {
+            Object.keys(playerPicks).forEach(player => {
+                let pickElement = document.querySelector(`.player-picks[data-player="${player}"]`);
+                if (!pickElement) {
+                    pickElement = document.createElement('p');
+                    pickElement.className = 'player-picks';
+                    pickElement.setAttribute('data-player', player);
+                    picksContainer.appendChild(pickElement);
+                }
+                const picks = playerPicks[player].map(pick => `${pick.Golfer} (Pick ${pick['Pick Number']})`).join(', ');
+                pickElement.textContent = `${player}'s Picks: ${picks || ''}`;
+            });
+        }
+
+        function updateGolferDropdown(availableGolfers) {
+            while (golferSelect.options.length > 1) {
+                golferSelect.remove(1);
+            }
+            availableGolfers.forEach(golfer => {
+                const option = document.createElement('option');
+                option.value = golfer;
+                option.textContent = golfer;
+                golferSelect.appendChild(option);
+            });
+        }
+
         function updateTimer() {
             const now = Date.now();
-            const elapsed = (now - lastUpdateTime) / 1000; // Time elapsed in seconds since last fetch
+            const elapsed = (now - lastUpdateTime) / 1000;
             lastUpdateTime = now;
+
+            // Throttle fetch requests
+            if (now - lastFetch < FETCH_INTERVAL) {
+                displayedSeconds = Math.max(0, displayedSeconds - elapsed);
+                if (timerElement && lastKnownPlayer !== 'N/A' && lastKnownPlayer !== 'Unknown') {
+                    timerElement.textContent = formatTime(Math.round(displayedSeconds));
+                    turnLabel.textContent = `${lastKnownPlayer}'s turn: `;
+                }
+                setTimeout(updateTimer, 1000);
+                return;
+            }
 
             fetch('/draft_state')
                 .then(response => response.json())
                 .then(data => {
+                    lastFetch = now;
                     currentPlayer = data.current_player || 'N/A';
                     const serverSeconds = data.remaining_time !== undefined && !isNaN(data.remaining_time) ? data.remaining_time : 0;
                     const draftComplete = data.draft_complete;
@@ -136,17 +180,22 @@
                         return;
                     }
 
-                    // Use server time if it differs significantly, otherwise use client-side countdown
                     if (Math.abs(serverSeconds - displayedSeconds) > 2) {
                         displayedSeconds = serverSeconds;
                     } else {
                         displayedSeconds = Math.max(0, displayedSeconds - elapsed);
                     }
 
-                    if (timerElement && currentPlayer !== 'N/A') {
+                    // Update last known state to persist timer during errors
+                    if (currentPlayer !== 'N/A' && currentPlayer !== 'Unknown') {
+                        lastKnownPlayer = currentPlayer;
+                        lastKnownSeconds = displayedSeconds;
+                    }
+
+                    if (timerElement && lastKnownPlayer !== 'N/A' && lastKnownPlayer !== 'Unknown') {
                         timerElement.textContent = formatTime(Math.round(displayedSeconds));
-                        turnLabel.textContent = `${currentPlayer}'s turn: `;
-                        if (currentPlayer === userPlayer) {
+                        turnLabel.textContent = `${lastKnownPlayer}'s turn: `;
+                        if (lastKnownPlayer === userPlayer) {
                             pickButton.disabled = false;
                             autopickButton.disabled = false;
                         } else {
@@ -159,13 +208,18 @@
                         pickButton.disabled = true;
                         autopickButton.disabled = true;
                     }
+
+                    // Update picks and dropdown
+                    updatePicks(data.player_picks);
+                    updateGolferDropdown(data.available_golfers);
                 })
                 .catch(error => {
                     console.error("Error fetching draft state:", error);
-                    timerElement.textContent = '0:00';
-                    turnLabel.textContent = 'Error fetching turn.';
-                    pickButton.disabled = true;
-                    autopickButton.disabled = true;
+                    displayedSeconds = Math.max(0, displayedSeconds - elapsed);
+                    if (timerElement && lastKnownPlayer !== 'N/A' && lastKnownPlayer !== 'Unknown') {
+                        timerElement.textContent = formatTime(Math.round(displayedSeconds));
+                        turnLabel.textContent = `${lastKnownPlayer}'s turn: `;
+                    }
                 })
                 .finally(() => {
                     setTimeout(updateTimer, 1000);
