@@ -107,6 +107,8 @@
         const autopickButton = document.getElementById('autopickButton');
         let currentPlayer = "{{ current_player }}";
         const userPlayer = "{{ user_player_mapping[username] }}";
+        let lastUpdateTime = Date.now();
+        let displayedSeconds = {{ timer_seconds }};
 
         function formatTime(seconds) {
             if (isNaN(seconds) || seconds < 0) {
@@ -118,11 +120,15 @@
         }
 
         function updateTimer() {
+            const now = Date.now();
+            const elapsed = (now - lastUpdateTime) / 1000; // Time elapsed in seconds since last fetch
+            lastUpdateTime = now;
+
             fetch('/draft_state')
                 .then(response => response.json())
                 .then(data => {
                     currentPlayer = data.current_player || 'N/A';
-                    const remainingTime = data.remaining_time !== undefined && !isNaN(data.remaining_time) ? data.remaining_time : 0;
+                    const serverSeconds = data.remaining_time !== undefined && !isNaN(data.remaining_time) ? data.remaining_time : 0;
                     const draftComplete = data.draft_complete;
 
                     if (draftComplete) {
@@ -130,10 +136,16 @@
                         return;
                     }
 
+                    // Use server time if it differs significantly, otherwise use client-side countdown
+                    if (Math.abs(serverSeconds - displayedSeconds) > 2) {
+                        displayedSeconds = serverSeconds;
+                    } else {
+                        displayedSeconds = Math.max(0, displayedSeconds - elapsed);
+                    }
+
                     if (timerElement && currentPlayer !== 'N/A') {
-                        timerElement.textContent = formatTime(remainingTime);
+                        timerElement.textContent = formatTime(Math.round(displayedSeconds));
                         turnLabel.textContent = `${currentPlayer}'s turn: `;
-                        // Enable/disable buttons based on the current player
                         if (currentPlayer === userPlayer) {
                             pickButton.disabled = false;
                             autopickButton.disabled = false;
@@ -169,6 +181,7 @@
         }
 
         if (timerElement && currentPlayer !== 'N/A') {
+            timerElement.textContent = formatTime(displayedSeconds);
             updateTimer();
         }
 

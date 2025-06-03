@@ -9,11 +9,16 @@ from datetime import datetime
 import os
 import json
 from dotenv import load_dotenv
+import logging
 
 app = Flask(__name__)
 app.config['SESSION_TYPE'] = 'filesystem'
 app.config['SECRET_KEY'] = os.urandom(24)
 Session(app)
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
@@ -48,13 +53,12 @@ def ensure_pick_time_column():
     try:
         headers = draft_worksheet.row_values(1)
         if 'Pick Time' not in headers:
-            # Add 'Pick Time' as the last column
             draft_worksheet.update_cell(1, len(headers) + 1, 'Pick Time')
-            print("Added 'Pick Time' column to Draft Board worksheet")
+            logger.info("Added 'Pick Time' column to Draft Board worksheet")
         else:
-            print("'Pick Time' column already exists")
+            logger.info("'Pick Time' column already exists")
     except Exception as e:
-        print(f"Error ensuring 'Pick Time' column: {str(e)}")
+        logger.error(f"Error ensuring 'Pick Time' column: {str(e)}")
         raise
 
 def get_draft_order():
@@ -62,31 +66,36 @@ def get_draft_order():
     try:
         records = draft_worksheet.get_all_records()
         if not records:
-            print("No records found in Draft Board, using default PLAYERS")
+            logger.info("No records found in Draft Board, using default PLAYERS")
             return PLAYERS
         order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
         if not order:
-            print("No valid draft order entries, using default PLAYERS")
+            logger.info("No valid draft order entries, using default PLAYERS")
             return PLAYERS
-        # Ensure 'Draft Order' is an integer or convertible to int
         sorted_order = sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip())))
-        print(f"Draft order: {sorted_order}")
+        logger.info(f"Draft order: {sorted_order}")
         return sorted_order if order else PLAYERS
     except (ValueError, KeyError, TypeError) as e:
-        print(f"Error parsing draft order: {str(e)}, falling back to default order")
+        logger.error(f"Error parsing draft order: {str(e)}, falling back to default order")
         return PLAYERS
 
 @backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=5)
 def load_golfers():
     """Load golfers from the Google Sheet."""
-    golfers = worksheet.get_all_records()
-    print(f"Loaded golfers: {golfers}")
-    return sorted(golfers, key=lambda x: int(x['Ranking']))
+    try:
+        golfers = worksheet.get_all_records()
+        logger.info(f"Loaded golfers: {golfers}")
+        return sorted(golfers, key=lambda x: int(x['Ranking']))
+    except Exception as e:
+        logger.error(f"Error loading golfers: {str(e)}")
+        raise
 
 @backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=5)
 def load_draft_picks():
     """Load draft picks from the Google Sheet."""
     try:
+        # Force a refresh by re-fetching the worksheet data
+        draft_worksheet = sheet.worksheet('Draft Board')
         records = draft_worksheet.get_all_records()
         picks = []
         for record in records:
@@ -102,26 +111,26 @@ def load_draft_picks():
                         'Pick Number': pick_num,
                         'Pick Time': pick_time
                     })
-        print(f"Loaded draft picks: {picks}")
+        logger.info(f"Loaded draft picks: {picks}")
         return picks
     except Exception as e:
-        print(f"Error loading draft picks: {str(e)}")
-        return []
+        logger.error(f"Error loading draft picks: {str(e)}")
+        raise
 
 def perform_autopick(current_player, current_pick_number, draft_order, picks):
     """Perform an autopick for the current player."""
     try:
         golfers = load_golfers()
         available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
-        print(f"Available golfers for autopick: {available_golfers}")
+        logger.info(f"Available golfers for autopick: {available_golfers}")
         if not available_golfers:
-            print("No golfers available for autopick")
+            logger.warning("No golfers available for autopick")
             return False
 
         golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
         player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == current_player), None)
         if not player_row:
-            print("Player not found in draft board for autopick")
+            logger.error("Player not found in draft board for autopick")
             return False
 
         column = f'Pick {current_pick_number}'
@@ -130,20 +139,20 @@ def perform_autopick(current_player, current_pick_number, draft_order, picks):
         if pick_time_col:
             draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
         else:
-            print("Pick Time column not found during autopick")
+            logger.error("Pick Time column not found during autopick")
             return False
 
         draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
-        print(f"Autopick successful: {current_player} picked {golfer}")
+        logger.info(f"Autopick successful: {current_player} picked {golfer}")
         return True
     except Exception as e:
-        print(f"Error during autopick: {str(e)}")
+        logger.error(f"Error during autopick: {str(e)}")
         return False
 
 def get_current_turn(picks, draft_order):
     """Determine whose turn it is and the remaining time, performing autopick if necessary."""
     if not draft_order:
-        print("Draft order is empty")
+        logger.info("Draft order is empty")
         return None, None, TURN_DURATION
 
     player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
@@ -152,14 +161,13 @@ def get_current_turn(picks, draft_order):
         if player in player_picks:
             player_picks[player].append(pick)
 
-    print(f"Player picks: {player_picks}")
+    logger.info(f"Player picks: {player_picks}")
 
     for round_num in range(1, 4):  # 3 picks per player
         for player in draft_order:
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
-                # Calculate remaining time based on the last pick's timestamp
                 last_pick = max(picks, key=lambda x: x.get('Pick Time', ''), default=None)
                 if last_pick and last_pick.get('Pick Time'):
                     try:
@@ -167,177 +175,200 @@ def get_current_turn(picks, draft_order):
                         elapsed = (datetime.now() - pick_time).total_seconds()
                         remaining_time = max(0, TURN_DURATION - elapsed)
                     except ValueError as e:
-                        print(f"Error parsing Pick Time '{last_pick['Pick Time']}': {str(e)}")
+                        logger.error(f"Error parsing Pick Time '{last_pick['Pick Time']}': {str(e)}")
                         remaining_time = TURN_DURATION
                 else:
                     remaining_time = TURN_DURATION
 
-                # If the timer has expired, perform autopick
                 if remaining_time <= 0:
-                    print(f"Timer expired for {player_name}'s turn, performing autopick")
+                    logger.info(f"Timer expired for {player_name}'s turn, performing autopick")
                     success = perform_autopick(player_name, pick_number, draft_order, picks)
                     if success:
-                        # Reload picks after autopick
                         picks = load_draft_picks()
                         player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
                         for pick in picks:
                             player = pick['Player']
                             if player in player_picks:
                                 player_picks[player].append(pick)
-                        # Recursively call to get the next turn
                         return get_current_turn(picks, draft_order)
 
-                print(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
+                logger.info(f"Current turn - Player: {player_name}, Pick Number: {pick_number}, Remaining Time: {remaining_time}")
                 return player_name, pick_number, int(remaining_time)
 
-    print("No current turn, draft might be complete")
+    logger.info("No current turn, draft might be complete")
     return None, None, TURN_DURATION
 
 @app.route('/')
 @app.route('/index')
 def index():
-    if 'username' not in session:
-        return redirect(url_for('login'))
+    try:
+        if 'username' not in session:
+            logger.info("No username in session, redirecting to login")
+            return redirect(url_for('login'))
 
-    # Ensure the 'Pick Time' column exists
-    ensure_pick_time_column()
+        ensure_pick_time_column()
 
-    username = session['username']
-    golfers = load_golfers()
-    picks = load_draft_picks()
-    draft_order = get_draft_order()
-    # Handle both string and dict types in draft_order
-    player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
+        username = session['username']
+        logger.info(f"Loading index for username: {username}")
+        golfers = load_golfers()
+        picks = load_draft_picks()
+        draft_order = get_draft_order()
+        player_picks = {player['Player'] if isinstance(player, dict) else player: [] for player in draft_order}
 
-    for pick in picks:
-        player = pick['Player']
-        if player in player_picks:
-            player_picks[player].append(pick)
+        for pick in picks:
+            player = pick['Player']
+            if player in player_picks:
+                player_picks[player].append(pick)
 
-    current_player, current_pick_number, remaining_time = get_current_turn(picks, draft_order)
-    # Ensure current_player is a string
-    current_player = str(current_player) if current_player else 'N/A'
+        current_player, current_pick_number, remaining_time = get_current_turn(picks, draft_order)
+        current_player = str(current_player) if current_player else 'N/A'
+        logger.info(f"Index - Current player: {current_player}, Pick number: {current_pick_number}, Remaining time: {remaining_time}")
 
-    # Iterate over player names in player_picks instead of draft_order
-    draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
+        draft_complete = all(len(player_picks.get(player_name, [])) >= 3 for player_name in player_picks.keys())
 
-    return render_template(
-        'index.html',
-        username=username,
-        golfers=[g['Golfer Name'] for g in golfers],
-        picks=picks,
-        participants=draft_order,
-        player_picks=player_picks,
-        draft_complete=draft_complete,
-        current_player=current_player,
-        current_pick_number=current_pick_number,
-        timer_seconds=remaining_time,
-        user_player_mapping=USER_PLAYER_MAPPING
-    )
+        return render_template(
+            'index.html',
+            username=username,
+            golfers=[g['Golfer Name'] for g in golfers],
+            picks=picks,
+            participants=draft_order,
+            player_picks=player_picks,
+            draft_complete=draft_complete,
+            current_player=current_player,
+            current_pick_number=current_pick_number,
+            timer_seconds=remaining_time,
+            user_player_mapping=USER_PLAYER_MAPPING
+        )
+    except Exception as e:
+        logger.error(f"Internal Server Error in /index: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == password:
-            session['username'] = username
-            return redirect(url_for('index'))
-        else:
-            return render_template('login.html', error="Invalid credentials")
-    return render_template('login.html')
+    try:
+        if request.method == 'POST':
+            username = request.form['username']
+            password = request.form['password']
+            if username in USER_CREDENTIALS and USER_CREDENTIALS[username] == password:
+                session['username'] = username
+                logger.info(f"User {username} logged in successfully")
+                return redirect(url_for('index'))
+            else:
+                logger.warning(f"Failed login attempt for username: {username}")
+                return render_template('login.html', error="Invalid credentials")
+        return render_template('login.html')
+    except Exception as e:
+        logger.error(f"Internal Server Error in /login: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/logout')
 def logout():
-    session.pop('username', None)
-    return redirect(url_for('login'))
+    try:
+        session.pop('username', None)
+        logger.info("User logged out")
+        return redirect(url_for('login'))
+    except Exception as e:
+        logger.error(f"Internal Server Error in /logout: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/pick', methods=['POST'])
 def pick():
-    if 'username' not in session:
-        return redirect(url_for('login'))
+    try:
+        if 'username' not in session:
+            logger.info("No username in session, redirecting to login")
+            return redirect(url_for('login'))
 
-    username = session['username']
-    golfer = request.form.get('golfer')
-    if not golfer:
-        flash('No golfer selected', 'error')
+        username = session['username']
+        golfer = request.form.get('golfer')
+        if not golfer:
+            flash('No golfer selected', 'error')
+            return redirect(url_for('index'))
+
+        picks = load_draft_picks()
+        draft_order = get_draft_order()
+        current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
+
+        user_player = USER_PLAYER_MAPPING.get(username)
+        if user_player != current_player:
+            flash('Not your turn', 'error')
+            return redirect(url_for('index'))
+
+        golfers = load_golfers()
+        available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
+        if golfer not in available_golfers:
+            flash('Golfer not available', 'error')
+            return redirect(url_for('index'))
+
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
+        if not player_row:
+            flash('Player not found in draft board', 'error')
+            return redirect(url_for('index'))
+
+        column = f'Pick {current_pick_number}'
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pick_time_col = draft_worksheet.find('Pick Time')
+        if pick_time_col:
+            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+        else:
+            flash('Pick Time column not found', 'error')
+            return redirect(url_for('index'))
+
+        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        logger.info(f"Pick successful: {user_player} picked {golfer}")
+
         return redirect(url_for('index'))
-
-    picks = load_draft_picks()
-    draft_order = get_draft_order()
-    current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
-
-    user_player = USER_PLAYER_MAPPING.get(username)
-    if user_player != current_player:
-        flash('Not your turn', 'error')
-        return redirect(url_for('index'))
-
-    golfers = load_golfers()
-    available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
-    if golfer not in available_golfers:
-        flash('Golfer not available', 'error')
-        return redirect(url_for('index'))
-
-    player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
-    if not player_row:
-        flash('Player not found in draft board', 'error')
-        return redirect(url_for('index'))
-
-    column = f'Pick {current_pick_number}'
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    pick_time_col = draft_worksheet.find('Pick Time')
-    if pick_time_col:
-        draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
-    else:
-        flash('Pick Time column not found', 'error')
-        return redirect(url_for('index'))
-
-    draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
-
-    return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f"Internal Server Error in /pick: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/autopick', methods=['POST'])
 def autopick():
-    if 'username' not in session:
-        return redirect(url_for('login'))
+    try:
+        if 'username' not in session:
+            logger.info("No username in session, redirecting to login")
+            return redirect(url_for('login'))
 
-    username = session['username']
-    picks = load_draft_picks()
-    draft_order = get_draft_order()
-    current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
+        username = session['username']
+        picks = load_draft_picks()
+        draft_order = get_draft_order()
+        current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
-    user_player = USER_PLAYER_MAPPING.get(username)
-    print(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
-    if user_player != current_player:
-        flash('Not your turn', 'error')
+        user_player = USER_PLAYER_MAPPING.get(username)
+        logger.info(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
+        if user_player != current_player:
+            flash('Not your turn', 'error')
+            return redirect(url_for('index'))
+
+        golfers = load_golfers()
+        available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
+        logger.info(f"Available golfers for autopick: {available_golfers}")
+        if not available_golfers:
+            flash('No golfers available', 'error')
+            return redirect(url_for('index'))
+
+        golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
+
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
+        if not player_row:
+            flash('Player not found in draft board', 'error')
+            return redirect(url_for('index'))
+
+        column = f'Pick {current_pick_number}'
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pick_time_col = draft_worksheet.find('Pick Time')
+        if pick_time_col:
+            draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
+        else:
+            flash('Pick Time column not found', 'error')
+            return redirect(url_for('index'))
+
+        draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
+        logger.info(f"Autopick successful: {user_player} picked {golfer}")
+
         return redirect(url_for('index'))
-
-    golfers = load_golfers()
-    available_golfers = [g for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
-    print(f"Available golfers for autopick: {available_golfers}")
-    if not available_golfers:
-        flash('No golfers available', 'error')
-        return redirect(url_for('index'))
-
-    golfer = min(available_golfers, key=lambda x: int(x['Ranking']))['Golfer Name']
-
-    player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == user_player), None)
-    if not player_row:
-        flash('Player not found in draft board', 'error')
-        return redirect(url_for('index'))
-
-    column = f'Pick {current_pick_number}'
-    pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    pick_time_col = draft_worksheet.find('Pick Time')
-    if pick_time_col:
-        draft_worksheet.update_cell(player_row, pick_time_col.col, pick_time)
-    else:
-        flash('Pick Time column not found', 'error')
-        return redirect(url_for('index'))
-
-    draft_worksheet.update_cell(player_row, draft_worksheet.find(column).col, golfer)
-
-    return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f"Internal Server Error in /autopick: {str(e)}")
+        return "Internal Server Error", 500
 
 @app.route('/draft_state', methods=['GET'])
 def draft_state():
@@ -345,7 +376,6 @@ def draft_state():
         picks = load_draft_picks()
         draft_order = get_draft_order()
         current_player, current_pick_number, remaining_time = get_current_turn(picks, draft_order)
-        # Ensure current_player is a string
         current_player = str(current_player) if current_player else 'N/A'
 
         golfers = load_golfers()
@@ -368,7 +398,7 @@ def draft_state():
             'draft_complete': draft_complete
         })
     except Exception as e:
-        app.logger.error(f"Error in draft_state: {str(e)}")
+        logger.error(f"Internal Server Error in /draft_state: {str(e)}")
         return jsonify({
             'current_player': 'N/A',
             'current_pick_number': None,
