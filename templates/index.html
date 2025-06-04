@@ -18,9 +18,30 @@
             border-radius: 5px;
             box-shadow: 0 0 10px rgba(0,0,0,0.1);
         }
+        .logout-section {
+            text-align: right;
+            margin-bottom: 10px;
+        }
+        .logout-button {
+            background-color: #f44336;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            border-radius: 3px;
+        }
+        .logout-button:hover {
+            background-color: #d32f2f;
+        }
         .header {
             text-align: center;
             margin-bottom: 20px;
+        }
+        .event-subtitle {
+            font-size: 1.2em;
+            color: #555;
+            margin-top: -10px;
         }
         .player-info {
             margin-bottom: 20px;
@@ -58,13 +79,50 @@
         .draft-complete {
             color: green;
             font-weight: bold;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .admin-section {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            display: {{ 'block' if username == 'admin' else 'none' }};
+        }
+        .picks-list {
+            margin-top: 20px;
+        }
+        .player-picks {
+            display: flex;
+            align-items: center;
+            padding: 5px 0;
+            margin: 0;
+        }
+        .player-picks:nth-child(odd) {
+            background-color: #e6f0fa; /* Light blue fill for odd rows */
+        }
+        .player-picks:nth-child(even) {
+            background-color: white; /* White fill for even rows */
+        }
+        .player-name-container {
+            width: 100px; /* Fixed width to align picks */
+            flex-shrink: 0;
+        }
+        .player-name {
+            font-weight: bold;
+        }
+        .picks-container {
+            flex-grow: 1;
         }
     </style>
 </head>
 <body>
     <div class="container">
+        <div class="logout-section">
+            <button class="logout-button" onclick="window.location.href='/logout'">Logout</button>
+        </div>
         <div class="header">
             <h1>Fantasy Golf Draft</h1>
+            <p class="event-subtitle">{{ current_event['name'] }} at {{ current_event['location'] }}</p>
         </div>
         <div class="player-info">
             <span class="font-semibold">Logged in as: {{ username }} ({{ user_player_mapping[username] }})</span><br>
@@ -75,9 +133,7 @@
                 <span id="turnLabel">No active turn.</span>
             {% endif %}
         </div>
-        {% if draft_complete %}
-            <p class="draft-complete">Draft is complete!</p>
-        {% else %}
+        {% if not draft_complete %}
             <form id="pickForm" method="POST" action="/pick">
                 <select name="golfer" id="golferSelect">
                     <option value="">Select a Golfer</option>
@@ -88,14 +144,44 @@
                 <button type="submit" class="pick-button" id="pickButton">Pick Golfer</button>
                 <button type="button" class="autopick-button" id="autopickButton">Auto Pick</button>
             </form>
+        {% endif %}
+        {% if draft_complete %}
+            <p class="draft-complete">Draft is complete!</p>
+        {% endif %}
+        <div class="picks-list">
             <div id="picks">
                 {% for player, picks in player_picks.items() %}
-                    <p class="player-picks" data-player="{{ player }}">{{ player }}'s Picks: 
-                        {% for pick in picks %}
-                            {{ pick['Golfer'] }} (Pick {{ pick['Pick Number'] }})
-                        {% endfor %}
-                    </p>
+                    <div class="player-picks" data-player="{{ player }}">
+                        <div class="player-name-container">
+                            <span class="player-name">{{ player }}</span>:
+                        </div>
+                        <div class="picks-container">
+                            {% for pick in picks %}
+                                {{ pick['Golfer'] }} (Pick {{ pick['Pick Number'] }})
+                            {% endfor %}
+                        </div>
+                    </div>
                 {% endfor %}
+            </div>
+        </div>
+        {% if not draft_complete %}
+            <div class="admin-section">
+                <h3>Admin Pick</h3>
+                <form id="adminPickForm" method="POST" action="/admin_pick">
+                    <select name="player" id="adminPlayerSelect">
+                        <option value="">Select a Player</option>
+                        {% for player in participants %}
+                            <option value="{{ player['Player'] if player is mapping else player }}">{{ player['Player'] if player is mapping else player }}</option>
+                        {% endfor %}
+                    </select>
+                    <select name="golfer" id="adminGolferSelect">
+                        <option value="">Select a Golfer</option>
+                        {% for golfer in golfers %}
+                            <option value="{{ golfer }}">{{ golfer }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="pick-button">Admin Pick Golfer</button>
+                </form>
             </div>
         {% endif %}
     </div>
@@ -130,13 +216,20 @@
             Object.keys(playerPicks).forEach(player => {
                 let pickElement = document.querySelector(`.player-picks[data-player="${player}"]`);
                 if (!pickElement) {
-                    pickElement = document.createElement('p');
+                    pickElement = document.createElement('div');
                     pickElement.className = 'player-picks';
                     pickElement.setAttribute('data-player', player);
+                    pickElement.innerHTML = `
+                        <div class="player-name-container">
+                            <span class="player-name">${player}</span>:
+                        </div>
+                        <div class="picks-container"></div>
+                    `;
                     picksContainer.appendChild(pickElement);
                 }
+                const picksContainer = pickElement.querySelector('.picks-container');
                 const picks = playerPicks[player].map(pick => `${pick.Golfer} (Pick ${pick['Pick Number']})`).join(', ');
-                pickElement.textContent = `${player}'s Picks: ${picks || ''}`;
+                picksContainer.textContent = picks || '';
             });
         }
 

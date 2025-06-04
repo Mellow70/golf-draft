@@ -20,7 +20,13 @@ Session(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# Event configuration
+CURRENT_EVENT = {
+    'name': 'U.S. Open',
+    'location': 'Oakmont'
+}
+
+load_dotenv(encoding='utf-8')
 SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 
 scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -41,10 +47,10 @@ USER_PLAYER_MAPPING = {
     'admin': 'Admin'
 }
 USER_CREDENTIALS = {
-    'user1': 'Player1-PGA2025', 'user2': 'Player2-PGA2025', 'user3': 'Player3-PGA2025',
+    'user1': 'Alex2025', 'user2': 'Player2-PGA2025', 'user3': 'Player3-PGA2025',
     'user4': 'Player4-PGA2025', 'user5': 'Player5-PGA2025', 'user6': 'Player6-PGA2025',
     'user7': 'Player7-PGA2025', 'user8': 'Player8-PGA2025', 'user9': 'Player9-PGA2025',
-    'admin': 'admin'
+    'admin': 'mellow'
 }
 TURN_DURATION = 180  # 3 minutes in seconds
 
@@ -248,8 +254,12 @@ def get_current_turn(picks, draft_order):
 
     logger.info(f"Player picks: {player_picks}")
 
-    for round_num in range(1, 4):
-        for player in draft_order:
+    for round_num in range(1, 4):  # Rounds 1 to 3
+        # Snake draft: reverse order in even-numbered rounds (Round 2)
+        current_order = draft_order if round_num % 2 != 0 else list(reversed(draft_order))
+        logger.info(f"Round {round_num} draft order: {current_order}")
+
+        for player in current_order:
             player_name = player['Player'] if isinstance(player, dict) else player
             if len(player_picks[player_name]) < round_num:
                 pick_number = round_num
@@ -331,7 +341,8 @@ def index():
             current_player=current_player,
             current_pick_number=current_pick_number,
             timer_seconds=remaining_time,
-            user_player_mapping=USER_PLAYER_MAPPING
+            user_player_mapping=USER_PLAYER_MAPPING,
+            current_event=CURRENT_EVENT
         )
     except Exception as e:
         logger.error(f"Internal Server Error in /index: {str(e)}")
@@ -518,6 +529,70 @@ def draft_state():
             'draft_complete': False,
             'error': str(e)
         }), 200
+
+@app.route('/admin_pick', methods=['POST'])
+def admin_pick():
+    try:
+        if 'username' not in session or session['username'] != 'admin':
+            logger.info("Admin pick attempted by non-admin user, redirecting to login")
+            return redirect(url_for('login'))
+
+        player = request.form.get('player')
+        golfer = request.form.get('golfer')
+        logger.info(f"Admin pick attempt - Player: {player}, Golfer: {golfer}")
+        if not player or not golfer:
+            logger.warning("No player or golfer selected in admin pick attempt")
+            flash('Please select both a player and a golfer', 'error')
+            return redirect(url_for('index'))
+
+        picks = load_draft_picks()
+        golfers = load_golfers()
+        available_golfers = [g['Golfer Name'] for g in golfers if g['Golfer Name'] not in [p['Golfer'] for p in picks]]
+        if golfer not in available_golfers:
+            logger.warning(f"Golfer {golfer} not available for {player}")
+            flash('Golfer not available', 'error')
+            return redirect(url_for('index'))
+
+        if player not in [p['Player'] for p in get_draft_order()]:
+            logger.error(f"Player {player} not found in draft order")
+            flash('Invalid player', 'error')
+            return redirect(url_for('index'))
+
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row['Player'] == player), None)
+        if not player_row:
+            logger.error(f"Player {player} not found in draft board")
+            flash('Player not found in draft board', 'error')
+            return redirect(url_for('index'))
+
+        player_picks = [p for p in picks if p['Player'] == player]
+        current_pick_number = len(player_picks) + 1
+        if current_pick_number > 3:
+            logger.warning(f"Player {player} has already made 3 picks")
+            flash('Player has already made all picks', 'error')
+            return redirect(url_for('index'))
+
+        column = f'Pick {current_pick_number}'
+        pick_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        pick_time_col = draft_worksheet.find('Pick Time')
+        if pick_time_col:
+            update_draft_cell(player_row, pick_time_col.col, pick_time)
+        else:
+            logger.error("Pick Time column not found during admin pick")
+            flash('Pick Time column not found', 'error')
+            return redirect(url_for('index'))
+
+        update_draft_cell(player_row, draft_worksheet.find(column).col, golfer)
+        logger.info(f"Admin pick successful: {player} picked {golfer}")
+        # Invalidate cache after admin pick
+        global cached_picks, last_picks_update
+        cached_picks = None
+        last_picks_update = None
+
+        return redirect(url_for('index'))
+    except Exception as e:
+        logger.error(f"Internal Server Error in /admin_pick: {str(e)}")
+        flash('Failed to register admin pick, please try again', 'error')
+        return redirect(url_for('index'))
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 8000))
