@@ -73,10 +73,12 @@ TURN_DURATION = 180  # 3 minutes in seconds
 cached_picks = None
 cached_golfers = None
 cached_draft_order = None
+cached_draft_start_time = None
 last_picks_update = None
 last_golfers_update = None
 last_draft_order_update = None
-CACHE_DURATION = timedelta(seconds=10)  # Cache for 10 seconds
+last_draft_start_time_update = None
+CACHE_DURATION = timedelta(seconds=30)  # Increase cache duration
 
 def ensure_draft_columns():
     """Ensure the 'Pick Time' and 'Draft Start Time' columns exist in the Draft Board worksheet."""
@@ -93,7 +95,13 @@ def ensure_draft_columns():
         raise
 
 def get_draft_start_time():
-    """Get or set the draft start time from the Draft Board worksheet."""
+    """Get or set the draft start time from the Draft Board worksheet with caching, enforcing 8:00 PM EDT start."""
+    global cached_draft_start_time, last_draft_start_time_update
+    now = datetime.now()
+    if cached_draft_start_time and last_draft_start_time_update and (now - last_draft_start_time_update) < CACHE_DURATION:
+        logger.info("Returning cached draft start time")
+        return cached_draft_start_time
+
     try:
         headers = draft_worksheet.row_values(1)
         draft_start_col = headers.index('Draft Start Time') + 1 if 'Draft Start Time' in headers else None
@@ -101,25 +109,35 @@ def get_draft_start_time():
             logger.error("Draft Start Time column not found")
             return None
 
-        # Look for the first non-empty Draft Start Time
         values = draft_worksheet.col_values(draft_start_col)[1:]  # Skip header
         for value in values:
             if value:
-                return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+                cached_draft_start_time = datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
+                last_draft_start_time_update = now
+                return cached_draft_start_time
 
-        # If no start time exists, set it for the first player (user1: Stephen)
-        start_time = datetime.now()
+        # Enforce draft start at 8:00 PM EDT
+        scheduled_start = datetime(2025, 6, 8, 20, 0, 0)  # 8:00 PM EDT
+        if now < scheduled_start:
+            logger.info(f"Draft not started yet, current time {now}, scheduled start {scheduled_start}")
+            return None  # Prevent timer/picks until start time
+
+        start_time = now
         player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row.get('Player') == user_player_mapping['user1']), None)
         if player_row:
             draft_worksheet.update_cell(player_row, draft_start_col, start_time.strftime('%Y-%m-%d %H:%M:%S'))
             logger.info(f"Set Draft Start Time to {start_time} for {user_player_mapping['user1']}")
+            cached_draft_start_time = start_time
+            last_draft_start_time_update = now
             return start_time
         else:
             logger.error(f"{user_player_mapping['user1']} not found in draft board to set Draft Start Time")
             return None
-    except Exception as e:
-        logger.error(f"Error getting/setting Draft Start Time: {str(e)}")
-        return None
+    except gspread.exceptions.APIError as e:
+        if e.response and e.response.status_code == 429:
+            logger.error(f"APIError 429 in get_draft_start_time: {str(e)}")
+            return cached_draft_start_time  # Return cached value on quota exceeded
+        raise
 
 def get_draft_order():
     """Get the draft order from the Draft Board worksheet with caching."""
@@ -149,7 +167,7 @@ def get_draft_order():
         logger.error(f"Error parsing draft order: {str(e)}, falling back to default order")
         return [{'Player': player} for player in user_player_mapping.values()]
 
-@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
+@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=120)  # Increase max_time to 120s
 def load_golfers():
     """Load golfers from the Google Sheet with caching."""
     global cached_golfers, last_golfers_update
@@ -171,7 +189,7 @@ def load_golfers():
             return cached_golfers
         raise
 
-@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
+@backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=120)  # Increase max_time to 120s
 def load_draft_picks():
     """Load draft picks from the Google Sheet with caching."""
     global cached_picks, last_picks_update
@@ -201,11 +219,12 @@ def load_draft_picks():
         cached_picks = picks
         last_picks_update = now
         return picks
-    except Exception as e:
-        logger.error(f"Error loading draft picks: {str(e)}")
-        if cached_picks:
-            logger.info("Returning cached draft picks due to error")
-            return cached_picks
+    except gspread.exceptions.APIError as e:
+        if e.response and e.response.status_code == 429:
+            logger.error(f"APIError 429 in load_draft_picks: {str(e)}")
+            if cached_picks:
+                logger.info("Returning cached draft picks due to quota exceeded")
+                return cached_picks
         raise
 
 @backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
@@ -327,6 +346,12 @@ def index():
 
         username = session['username']
         logger.info(f"Loading index for username: {username}")
+        # Check if draft has started
+        scheduled_start = datetime(2025, 6, 8, 20, 0, 0)  # 8:00 PM EDT
+        if datetime.now() < scheduled_start:
+            logger.info(f"Access blocked, draft starts at {scheduled_start}, current time {datetime.now()}")
+            return render_template('waiting.html', start_time=scheduled_start.strftime('%I:%M %p EDT'))
+
         golfers = load_golfers()
         picks = load_draft_picks()
         draft_order = get_draft_order()
@@ -355,7 +380,7 @@ def index():
             current_player=current_player,
             current_pick_number=current_pick_number,
             timer_seconds=remaining_time,
-            user_player_mapping=user_player_mapping,  # Fixed from USER_PLAYER_MAPPING
+            user_player_mapping=user_player_mapping,
             current_event=CURRENT_EVENT
         )
     except Exception as e:
@@ -409,7 +434,7 @@ def pick():
         draft_order = get_draft_order()
         current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
-        user_player = user_player_mapping.get(username)  # Fixed from USER_PLAYER_MAPPING
+        user_player = user_player_mapping.get(username)
         if user_player != current_player:
             logger.warning(f"Not {user_player}'s turn, current player is {current_player}")
             flash('Not your turn', 'error')
@@ -463,7 +488,7 @@ def autopick():
         draft_order = get_draft_order()
         current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
-        user_player = user_player_mapping.get(username)  # Fixed from USER_PLAYER_MAPPING
+        user_player = user_player_mapping.get(username)
         logger.info(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
         if user_player != current_player:
             flash('Not your turn', 'error')
@@ -540,7 +565,7 @@ def draft_state():
             'picks': cached_picks if cached_picks else [],
             'available_golfers': [],
             'player_picks': {},
-            'draft_complete': False,
+            'draft_complete': false,
             'error': str(e)
         }), 200
 
