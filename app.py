@@ -39,18 +39,33 @@ sheet = gc.open_by_key(SPREADSHEET_ID)
 worksheet = sheet.worksheet('Golfers')
 draft_worksheet = sheet.worksheet('Draft Board')
 
-PLAYERS = ['Alex', 'Liz', 'Mel', 'Eric', 'Jed', 'Stacie', 'Tony', 'Brandon', 'Ryan']
-
-USER_PLAYER_MAPPING = {
-    'user1': 'Alex', 'user2': 'Liz', 'user3': 'Mel', 'user4': 'Eric', 'user5': 'Jed',
-    'user6': 'Stacie', 'user7': 'Tony', 'user8': 'Brandon', 'user9': 'Ryan',
-    'admin': 'Admin'
+user_player_mapping = {
+    'user1': 'Stephen',
+    'user2': 'Jason',
+    'user3': 'Josh',
+    'user4': 'Jed',
+    'user5': 'Alex',
+    'user6': 'Brandon',
+    'user7': 'Eric',
+    'user8': 'Mel',
+    'user9': 'Stacie',
+    'user10': 'Ryan',
+    'user11': 'Liz'
 }
+
 USER_CREDENTIALS = {
-    'user1': 'Alex2025', 'user2': 'Player2-PGA2025', 'user3': 'Player3-PGA2025',
-    'user4': 'Player4-PGA2025', 'user5': 'Player5-PGA2025', 'user6': 'Player6-PGA2025',
-    'user7': 'Player7-PGA2025', 'user8': 'Player8-PGA2025', 'user9': 'Player9-PGA2025',
-    'admin': 'mellow'
+    'user1': 'Zingg25',
+    'user2': 'JDog25',
+    'user3': 'Jorkman',
+    'user4': 'Jedman',
+    'user5': 'Alex1121',
+    'user6': 'Brands99',
+    'user7': 'Eric2988',
+    'user8': 'mellow',
+    'user9': '1winner',
+    'user10': 'ryry01',
+    'user11': 'Liz1962',
+    'admin': 'daboss'
 }
 TURN_DURATION = 180  # 3 minutes in seconds
 
@@ -92,16 +107,15 @@ def get_draft_start_time():
             if value:
                 return datetime.strptime(value, '%Y-%m-%d %H:%M:%S')
 
-        # If no start time exists, set it now
+        # If no start time exists, set it for the first player (user1: Stephen)
         start_time = datetime.now()
-        # Find the first row with a player (Alex should be at row 2)
-        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row.get('Player') == 'Alex'), None)
+        player_row = next((i + 2 for i, row in enumerate(draft_worksheet.get_all_records()) if row.get('Player') == user_player_mapping['user1']), None)
         if player_row:
             draft_worksheet.update_cell(player_row, draft_start_col, start_time.strftime('%Y-%m-%d %H:%M:%S'))
-            logger.info(f"Set Draft Start Time to {start_time}")
+            logger.info(f"Set Draft Start Time to {start_time} for {user_player_mapping['user1']}")
             return start_time
         else:
-            logger.error("Alex not found in draft board to set Draft Start Time")
+            logger.error(f"{user_player_mapping['user1']} not found in draft board to set Draft Start Time")
             return None
     except Exception as e:
         logger.error(f"Error getting/setting Draft Start Time: {str(e)}")
@@ -118,22 +132,22 @@ def get_draft_order():
     try:
         records = draft_worksheet.get_all_records()
         if not records:
-            logger.info("No records found in Draft Board, using default PLAYERS")
-            cached_draft_order = PLAYERS
+            logger.info("No records found in Draft Board, using default player mapping")
+            cached_draft_order = [{'Player': player} for player in user_player_mapping.values()]
         else:
             order = [r for r in records if 'Player' in r and 'Draft Order' in r and r['Draft Order']]
             if not order:
-                logger.info("No valid draft order entries, using default PLAYERS")
-                cached_draft_order = PLAYERS
+                logger.info("No valid draft order entries, using default player mapping")
+                cached_draft_order = [{'Player': player} for player in user_player_mapping.values()]
             else:
                 sorted_order = sorted(order, key=lambda x: int(float(str(x['Draft Order']).strip())))
                 logger.info(f"Draft order: {sorted_order}")
-                cached_draft_order = sorted_order if order else PLAYERS
+                cached_draft_order = sorted_order if order else [{'Player': player} for player in user_player_mapping.values()]
         last_draft_order_update = now
         return cached_draft_order
     except (ValueError, KeyError, TypeError) as e:
         logger.error(f"Error parsing draft order: {str(e)}, falling back to default order")
-        return PLAYERS
+        return [{'Player': player} for player in user_player_mapping.values()]
 
 @backoff.on_exception(backoff.expo, gspread.exceptions.APIError, max_tries=8, max_time=60)
 def load_golfers():
@@ -341,7 +355,7 @@ def index():
             current_player=current_player,
             current_pick_number=current_pick_number,
             timer_seconds=remaining_time,
-            user_player_mapping=USER_PLAYER_MAPPING,
+            user_player_mapping=user_player_mapping,  # Fixed from USER_PLAYER_MAPPING
             current_event=CURRENT_EVENT
         )
     except Exception as e:
@@ -395,7 +409,7 @@ def pick():
         draft_order = get_draft_order()
         current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
-        user_player = USER_PLAYER_MAPPING.get(username)
+        user_player = user_player_mapping.get(username)  # Fixed from USER_PLAYER_MAPPING
         if user_player != current_player:
             logger.warning(f"Not {user_player}'s turn, current player is {current_player}")
             flash('Not your turn', 'error')
@@ -449,7 +463,7 @@ def autopick():
         draft_order = get_draft_order()
         current_player, current_pick_number, _ = get_current_turn(picks, draft_order)
 
-        user_player = USER_PLAYER_MAPPING.get(username)
+        user_player = user_player_mapping.get(username)  # Fixed from USER_PLAYER_MAPPING
         logger.info(f"Autopick - Username: {username}, User Player: {user_player}, Current Player: {current_player}")
         if user_player != current_player:
             flash('Not your turn', 'error')
